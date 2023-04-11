@@ -1,0 +1,15 @@
+{
+  "dependencies": {
+    "@types/node": "^18.15.11"
+  },
+  "name": "cscript",
+  "version": "1.0.0",
+  "main": "cscript.js",
+  "scripts": {
+    "test": "jest"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": ""
+}
