@@ -46,6 +46,7 @@ var lexerRules = [
     ['def', /float/g],
     ['def', /any/g],
     ['def', /object/g],
+    ['def', /list/g],
     ['if', /if/g],
     ['break', /break/g],
     ['continue', /continue/g],
@@ -451,6 +452,10 @@ var Parser = /** @class */ (function () {
                     value = MK_OBJECT();
                     value.kind = value.type;
                     break;
+                case "list":
+                    value = MK_LIST();
+                    value.kind = value.type;
+                    break;
             }
             if (this.at().lexer == '=') {
                 this.eat();
@@ -477,6 +482,9 @@ var Parser = /** @class */ (function () {
                 case 'objectLiteral':
                     type = 'object';
                     break;
+                case "listLiteral":
+                    type = 'list';
+                    break;
                 default:
                     type = 'null';
             }
@@ -498,7 +506,7 @@ var Parser = /** @class */ (function () {
         };
     };
     Parser.prototype.parseAssignmentExpression = function () {
-        var left = this.parseComparisonExpression();
+        var left = this.parseListExpression();
         var operator = this.at();
         if (operator.lexer == '='
             || operator.lexer == '+='
@@ -830,6 +838,23 @@ var Parser = /** @class */ (function () {
         var body = this.parseBlock();
         return { kind: "whenStatement", triggers: triggers, body: body };
     };
+    Parser.prototype.parseListExpression = function () {
+        if (this.at().lexer == '[') {
+            this.eat();
+            var values = [];
+            while (this.at().lexer != ']') {
+                values.push(this.parseExpression());
+                if (this.at().lexer != ']') {
+                    this.expect(',', "Expected ',' between values");
+                }
+            }
+            this.eat();
+            return { kind: "listLiteral", values: values };
+        }
+        else {
+            return this.parseComparisonExpression();
+        }
+    };
     return Parser;
 }());
 function MK_FLOAT(n) {
@@ -861,6 +886,10 @@ function MK_NULL() {
 function MK_ANY(value) {
     return { type: 'any', value: value.value };
 }
+function MK_LIST(value) {
+    if (value === void 0) { value = []; }
+    return { type: 'list', value: value };
+}
 //interpreter
 function VisitVariableDeclaration(context, env) {
     var value = context.value
@@ -871,7 +900,8 @@ function VisitVariableDeclaration(context, env) {
         && context.type != 'string'
         && context.type != 'bool'
         && context.type != 'object'
-        && context.type != 'null') {
+        && context.type != 'null'
+        && context.type != 'list') {
         if (env.lookupClass(context.type)) {
             var className = env.lookupClass(context.type);
             var map = new Map();
@@ -942,7 +972,7 @@ function VisitAssignmentExpression(context, env) {
                     value: value.value % currentValue.value
                 });
         }
-        else {
+        else if (currentValue.type == 'float') {
             if (context.operator == '+=')
                 return env.assignVariable(name_2, {
                     type: value.type,
@@ -969,8 +999,15 @@ function VisitAssignmentExpression(context, env) {
                     value: value.value % currentValue.value
                 });
         }
+        else if (currentValue.type == 'string') {
+            if (context.operator == '+=')
+                return env.assignVariable(name_2, {
+                    type: value.type,
+                    value: value.value + currentValue.value
+                });
+        }
     }
-    else {
+    else if (!context.left.computed) {
         var name_3 = context.left.object.symbol;
         var properties = env.lookUpVariable(name_3).value.properties;
         var property = context.left.property.symbol;
@@ -979,6 +1016,17 @@ function VisitAssignmentExpression(context, env) {
             properties.set(property, { type: value.type, value: value });
         }
         return env.assignVariable(name_3, { type: 'object', properties: properties });
+    }
+    else {
+        var name_4 = context.left.object.symbol;
+        // @ts-ignore
+        var property = Visit(context.left.property, env).value;
+        var value = Visit(context.right, env);
+        var variable = env.lookUpVariable(name_4).value;
+        if (context.operator == '=') {
+            variable.value[property] = value;
+        }
+        return env.assignVariable(name_4, { type: 'list', value: variable.value });
     }
 }
 function VisitFunctionDeclaration(context, env) {
@@ -991,7 +1039,12 @@ function VisitClassDeclaration(context, env) {
 }
 function VisitMemberExpression(context, env) {
     var object = env.lookUpVariable(context.object.symbol).value;
-    return object.properties.get(context.property.symbol);
+    if (!context.computed)
+        return object.properties.get(context.property.symbol);
+    else {
+        // @ts-ignore
+        return object.value[Visit(context.property, env).value];
+    }
 }
 function VisitHTMLStatement(context, env) {
     // @ts-ignore
@@ -1017,13 +1070,13 @@ function VisitHTMLStatement(context, env) {
                         break;
                     else if (!tokens[j])
                         continue;
-                    var name_4 = tokens[j].slice(0, -1);
+                    var name_5 = tokens[j].slice(0, -1);
                     var value = tokens[++j];
                     if (value.trim()[0] == '(' && value.trim()[value.trim().length - 1] == ')') {
                         // @ts-ignore
                         value = evaluate(value.slice(0, -1).slice(1), env).value.value;
                     }
-                    properties.set(name_4, value);
+                    properties.set(name_5, value);
                 }
                 var element = env.lookupElement(elementName);
                 if (properties.size < element.properties.size) {
@@ -1084,33 +1137,46 @@ function VisitRepeatStatement(context, env) {
         var start = context.start ? Visit(context.start, env) : MK_INT();
         var inc = context.inc ? Visit(context.inc, env) : MK_INT(1);
         var end = Visit(context.end, env);
-        //@ts-ignore
-        for (var i = start.value; i < end.value; i += inc.value) {
-            var newEnv = new Environment(env);
-            newEnv.declareVariable(variableName, MK_INT(i), 'integer');
-            for (var _i = 0, _a = context.body; _i < _a.length; _i++) {
-                var statement = _a[_i];
-                if (statement.kind == 'breakStatement') {
-                    //@ts-ignore
-                    i = end.value;
-                    break;
+        if (end.type == 'list') {
+            for (var _i = 0, _a = end.value; _i < _a.length; _i++) {
+                var i = _a[_i];
+                var newEnv = new Environment(env);
+                newEnv.declareVariable(variableName, MK_ANY(i), 'any');
+                for (var _b = 0, _c = context.body; _b < _c.length; _b++) {
+                    var statement = _c[_b];
+                    Visit(statement, newEnv);
                 }
-                if (statement.kind == 'returnStatement') {
-                    //@ts-ignore
-                    i += inc.value;
-                    break;
+            }
+        }
+        else {
+            //@ts-ignore
+            for (var i = start.value; i < end.value; i += inc.value) {
+                var newEnv = new Environment(env);
+                newEnv.declareVariable(variableName, MK_INT(i), 'integer');
+                for (var _d = 0, _e = context.body; _d < _e.length; _d++) {
+                    var statement = _e[_d];
+                    if (statement.kind == 'breakStatement') {
+                        //@ts-ignore
+                        i = end.value;
+                        break;
+                    }
+                    if (statement.kind == 'returnStatement') {
+                        //@ts-ignore
+                        i += inc.value;
+                        break;
+                    }
+                    Visit(statement, newEnv);
                 }
-                Visit(statement, newEnv);
             }
         }
     }
     else {
-        for (var _b = 0, _c = context.values; _b < _c.length; _b++) {
-            var i = _c[_b];
+        for (var _f = 0, _g = context.values; _f < _g.length; _f++) {
+            var i = _g[_f];
             var newEnv = new Environment(env);
             newEnv.declareVariable(variableName, MK_ANY(Visit(i, newEnv)), 'any');
-            for (var _d = 0, _e = context.body; _d < _e.length; _d++) {
-                var statement = _e[_d];
+            for (var _h = 0, _j = context.body; _h < _j.length; _h++) {
+                var statement = _j[_h];
                 Visit(statement, newEnv);
             }
         }
@@ -1237,6 +1303,13 @@ function VisitWhenStatement(context, env) {
     }
     return MK_NULL();
 }
+function VisitListLiteral(context, env) {
+    var values = [];
+    context.values.forEach(function (i) {
+        values.push(Visit(i, env));
+    });
+    return { type: "list", value: values };
+}
 function Visit(context, env) {
     switch (context.kind) {
         case 'integer':
@@ -1297,6 +1370,8 @@ function Visit(context, env) {
             return VisitDowhileStatement(context, env);
         case "whenStatement":
             return VisitWhenStatement(context, env);
+        case "listLiteral":
+            return VisitListLiteral(context, env);
         default:
             throw ("Unknown token: ".concat(context, " of type ").concat(context.kind));
     }
@@ -1535,7 +1610,7 @@ var Environment = /** @class */ (function () {
     return Environment;
 }());
 function setupScope(env) {
-    env.declareVariable('PI', MK_FLOAT(3.141592653589793238462643383279), 'float', true);
+    env.declareVariable('PI', MK_FLOAT(3.1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679), 'float', true);
     env.declareVariable('null', MK_NULL(), 'null', true);
     env.declareVariable('true', MK_BOOL(true), 'bool', true);
     env.declareVariable('false', MK_BOOL(false), 'bool', true);

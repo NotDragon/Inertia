@@ -7,7 +7,8 @@ const lexerRules = [
     ['def', /string/g],
     ['def', /float/g],
     ['def', /any/g],
-    ['def', /object/g],
+	['def', /object/g],
+	['def', /list/g],
 	['if', /if/g],
 	['break', /break/g],
 	['continue', /continue/g],
@@ -314,6 +315,7 @@ type NodeType =
     | 'boolLiteral'
     | 'stringLiteral'
     | 'null'
+	| 'listLiteral'
     ;
 
 let isControl: NodeType[] = ['ifStatement', 'repeatStatement', 'functionDeclaration', 'classDeclaration', 'htmlStatement', 'elseIfStatement', 'whenStatement', "identifier"];
@@ -439,8 +441,12 @@ interface Property extends Expression{
 }
 
 interface ObjectLiteral extends Expression{
-    kind: 'objectLiteral';
-    properties: Property[];
+	kind: 'objectLiteral';
+	properties: Property[];
+}
+interface ListLiteral extends Expression{
+	kind: 'listLiteral';
+	values: Array<any>;
 }
 
 interface ComparisonExpression extends Expression{
@@ -677,19 +683,22 @@ class Parser{
                     value = MK_OBJECT();
                     value.kind = value.type;
                     break;
-            }
+				case "list":
+					value = MK_LIST();
+					value.kind = value.type;
+					break;
+			}
 
             if(this.at().lexer == '='){
                 this.eat();
                 value = this.parseStatement();
 
                 value.type = value.kind;
-
             }
+			
         }else if(operator.lexer == '=') {
             this.eat();
             value = this.parseStatement();
-
             switch(value.kind){
                 case 'integer':
                     type = 'integer';
@@ -706,6 +715,9 @@ class Parser{
                 case 'objectLiteral':
                     type = 'object';
                     break;
+				case "listLiteral":
+					type = 'list';
+					break;
                 default:
                     type = 'null';
             }
@@ -729,9 +741,9 @@ class Parser{
             } as VariableDeclaration;
         
     }
-
+	
     private parseAssignmentExpression(): Statement {
-        const left = this.parseComparisonExpression();
+        const left = this.parseListExpression();
         const operator = this.at();
 
         if(operator.lexer == '='
@@ -1025,6 +1037,7 @@ class Parser{
 			}
 		}else{
 			end = this.parseExpression();
+			
 			if(this.at().lexer == ':'){
 				this.eat();
 				name = this.eat().value;
@@ -1113,7 +1126,6 @@ class Parser{
 	private parseWhile(): Statement {
 		this.eat();
 		this.expect('(', `expected '(' after if`);
-		let elseIf: Statement;
 		
 		let condition = this.parseExpression();
 		
@@ -1128,7 +1140,6 @@ class Parser{
 	private parseDowhile() {
 		this.eat();
 		this.expect('(', `expected '(' after if`);
-		let elseIf: Statement;
 		
 		let condition = this.parseExpression();
 		
@@ -1160,10 +1171,41 @@ class Parser{
 		
 		return { kind: "whenStatement", triggers, body } as WhenStatement;
 	}
+	
+	private parseListExpression(): Expression {
+		if(this.at().lexer == '['){
+			this.eat();
+			let values = [];
+			while(this.at().lexer != ']'){
+				values.push(this.parseExpression());
+				
+				if(this.at().lexer != ']') {
+					this.expect(',', `Expected ',' between values`);
+				}
+			}
+			this.eat();
+			return { kind: "listLiteral", values } as ListLiteral
+		}else{
+			return this.parseComparisonExpression();
+		}
+	}
 }
 
 //values
-type ValueType = 'null' | 'integer' | 'float' | 'string' | 'bool' | 'any' | 'object' | 'nativeFunction' | 'userDefinedFunction' | 'class' | 'element';
+type ValueType =
+	| 'null'
+	| 'integer'
+	| 'float'
+	| 'string'
+	| 'bool'
+	| 'any'
+	| 'object'
+	| 'nativeFunction'
+	| 'userDefinedFunction'
+	| 'class'
+	| 'element'
+	| 'list'
+	;
 
 interface RuntimeValue{
     type: ValueType
@@ -1202,7 +1244,10 @@ interface AnyValue extends RuntimeValue{
 	type: 'any';
 	value: any;
 }
-
+interface ListValue extends RuntimeValue{
+	type: 'list';
+	value: Array<any>;
+}
 
 type FunctionCall = (args: RuntimeValue[], env: Environment) => RuntimeValue;
 interface NativeFunctionValue extends RuntimeValue{
@@ -1255,6 +1300,9 @@ function MK_NULL(): RuntimeValue{
 function MK_ANY(value: any): RuntimeValue{
 	return { type: 'any', value: value.value } as AnyValue;
 }
+function MK_LIST(value: Array<any> = []): RuntimeValue{
+	return { type: 'list', value: value } as ListValue;
+}
 
 
 //interpreter
@@ -1269,7 +1317,8 @@ function VisitVariableDeclaration(context: VariableDeclaration, env: Environment
         && context.type != 'string'
         && context.type != 'bool'
         && context.type != 'object'
-        && context.type != 'null'){
+        && context.type != 'null'
+		&& context.type != 'list'){
         if(env.lookupClass(context.type)){
             const className = env.lookupClass(context.type);
 
@@ -1342,7 +1391,7 @@ function VisitAssignmentExpression(context: AssignmentExpression, env: Environme
                     type: value.type,
                     value: (value as IntegerValue).value % (currentValue as FloatValue).value
                 } as IntegerValue);
-        } else {
+        } else if(currentValue.type == 'float'){
             if (context.operator == '+=')
                 return env.assignVariable(name, {
                     type: value.type,
@@ -1368,8 +1417,14 @@ function VisitAssignmentExpression(context: AssignmentExpression, env: Environme
                     type: value.type,
                     value: (value as FloatValue).value % (currentValue as FloatValue).value
                 } as FloatValue);
-        }
-    }else {
+        } else if(currentValue.type == 'string'){
+			if (context.operator == '+=')
+				return env.assignVariable(name, {
+					type: value.type,
+					value: (value as StringValue).value + (currentValue as StringValue).value
+				} as StringValue);
+		}
+    }else if(!(context.left as MemberExpression).computed){
         const name = ((context.left as MemberExpression).object as Identifier).symbol
 
         const properties = (env.lookUpVariable(name).value as ObjectValue).properties;
@@ -1381,7 +1436,20 @@ function VisitAssignmentExpression(context: AssignmentExpression, env: Environme
         }
 
         return env.assignVariable(name, {type: 'object', properties} as ObjectValue);
-    }
+    }else{
+		const name = ((context.left as MemberExpression).object as Identifier).symbol
+		
+		// @ts-ignore
+		const property = Visit((context.left as MemberExpression).property, env).value;
+		const value = Visit(context.right, env);
+		const variable = env.lookUpVariable(name).value as ListValue;
+		
+		if(context.operator == '='){
+			variable.value[property] = value;
+		}
+		
+		return env.assignVariable(name, { type: 'list', value: variable.value } as ListValue)
+	}
 }
 
 function VisitFunctionDeclaration(context: FunctionDeclaration, env: Environment): RuntimeValue {
@@ -1399,7 +1467,12 @@ function VisitClassDeclaration(context: ClassDeclaration, env: Environment): Run
 function VisitMemberExpression(context: MemberExpression, env: Environment): RuntimeValue {
     let object: ObjectValue = env.lookUpVariable((context.object as Identifier).symbol).value as ObjectValue;
 
-    return object.properties.get((context.property as Identifier).symbol);
+	if(!context.computed)
+    	return object.properties.get((context.property as Identifier).symbol);
+	else{
+		// @ts-ignore
+		return object.value[Visit(context.property, env).value];
+	}
 }
 
 function VisitHTMLStatement(context: HtmlStatement, env: Environment): RuntimeValue {
@@ -1420,7 +1493,7 @@ function VisitHTMLStatement(context: HtmlStatement, env: Environment): RuntimeVa
 			
 			if(currentVarName.trim()[0] == '<'){
 				let elementName = '';
-				let tokens  = currentVarName.trim().split(/ |"/g);
+				let tokens  = currentVarName.trim().split(/[ "]/g);
 				let properties = new Map<string, string>();
 				
 				elementName = tokens[0].slice(1);
@@ -1511,23 +1584,36 @@ function VisitRepeatStatement(context: RepeatStatement, env: Environment): Runti
 		let inc = context.inc? Visit(context.inc, env): MK_INT(1);
 		let end = Visit(context.end, env);
 		
-		//@ts-ignore
-		for(let i = start.value; i < end.value; i += inc.value){
-			let newEnv = new Environment(env);
-			newEnv.declareVariable(variableName, MK_INT(i), 'integer');
-			
-			for(let statement of context.body){
-				if(statement.kind == 'breakStatement') {
-					//@ts-ignore
-					i = end.value;
-					break;
+		if(end.type == 'list'){
+			// @ts-ignore
+			for(let i of end.value){
+				let newEnv = new Environment(env);
+				
+				newEnv.declareVariable(variableName, MK_ANY(i), 'any');
+				
+				for(let statement of context.body){
+					Visit(statement, newEnv);
 				}
-				if(statement.kind == 'returnStatement'){
-					//@ts-ignore
-					i += inc.value;
-					break;
+			}
+		}else {
+			//@ts-ignore
+			for (let i = start.value; i < end.value; i += inc.value) {
+				let newEnv = new Environment(env);
+				newEnv.declareVariable(variableName, MK_INT(i), 'integer');
+				
+				for (let statement of context.body) {
+					if (statement.kind == 'breakStatement') {
+						//@ts-ignore
+						i = end.value;
+						break;
+					}
+					if (statement.kind == 'returnStatement') {
+						//@ts-ignore
+						i += inc.value;
+						break;
+					}
+					Visit(statement, newEnv);
 				}
-				Visit(statement, newEnv);
 			}
 		}
 	}else{
@@ -1673,6 +1759,16 @@ function VisitWhenStatement(context: WhenStatement, env: Environment): RuntimeVa
 	return MK_NULL();
 }
 
+function VisitListLiteral(context: ListLiteral, env: Environment): RuntimeValue {
+	let values = [];
+	
+	context.values.forEach((i) => {
+		values.push(Visit(i, env));
+	});
+	
+	return { type: "list", value: values } as ListValue;
+}
+
 function Visit(context: Statement, env: Environment): RuntimeValue {
     switch (context.kind){
         case 'integer':
@@ -1755,6 +1851,9 @@ function Visit(context: Statement, env: Environment): RuntimeValue {
 	
 		case "whenStatement":
 			return VisitWhenStatement(context as WhenStatement, env);
+	
+		case "listLiteral":
+			return VisitListLiteral(context as ListLiteral, env);
 	
 		default:
             throw (`Unknown token: ${context} of type ${context.kind}`);
@@ -1876,10 +1975,8 @@ function VisitCallExpression(call: CallExpression, env: Environment): RuntimeVal
     if(func.type != 'nativeFunction'){
         throw `'${func}' is not a function`;
     }
-
-    let result = (func as NativeFunctionValue).call(args, env);
     
-    return result;
+    return  (func as NativeFunctionValue).call(args, env);
 }
 
 
@@ -2092,11 +2189,11 @@ class Environment {
 }
 
 function setupScope(env: Environment){
-    env.declareVariable('PI', MK_FLOAT(3.141592653589793238462643383279),'float' , true);
+    env.declareVariable('PI', MK_FLOAT(3.1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679),'float' , true);
 
     env.declareVariable('null', MK_NULL(), 'null', true);
     env.declareVariable('true', MK_BOOL(true), 'bool', true);
-    env.declareVariable('false', MK_BOOL(false), 'bool', true);
+	env.declareVariable('false', MK_BOOL(false), 'bool', true);
 
     function log(_args: RuntimeValue[], _env: Environment): RuntimeValue{
         _args.forEach((value) => {
