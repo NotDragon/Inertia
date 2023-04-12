@@ -258,24 +258,15 @@ function preProcessor(lexer: Token[]){
 	
 	lexer = lexer.filter(e => e);
 	
-	function processRunPreProcessor(args) {
-		eval(readTextFile(args[0]));
-	}
-
-	
 	for(const process of preProcessors){
 		let tokens = process.split(/[ @;]/g).filter(e => e && e != '');
 		let name = tokens[0];
 		tokens = tokens.slice(1);
 		
 		switch(name){
-			case 'run':
-				processRunPreProcessor(tokens);
-				break;
+		
 		}
 	}
-	
-	
 	
 	return lexer;
 }
@@ -772,7 +763,7 @@ class Parser{
         while(this.notEOF() && this.at().lexer != '}'){
             let type = this.expect('DEF', `Expected type, but got '${this.at()}'`).value;
             const key = this.expect('IDENTIFIER', 'Expected key of type IDENTIFIER').value;
-
+			
             if(type == 'int')
                 type = 'integer';
 
@@ -961,8 +952,10 @@ class Parser{
 
     private parseClassBody() {
         switch(this.at().lexer){
-            case 'DEF':
-                return this.parseVariableDeclaration();
+			case 'DEF':
+                let value = this.parseVariableDeclaration();
+				this.expect(';', `Expected ';' but got ${this.at()}`);
+				return value;
             case 'FUNC':
                 return this.parseFunctionDeclaration();
             default:
@@ -1300,6 +1293,9 @@ function MK_NULL(): RuntimeValue{
 function MK_ANY(value: any): RuntimeValue{
 	return { type: 'any', value: value.value } as AnyValue;
 }
+function MK_ANY_PURE(value: any): RuntimeValue{
+	return { type: 'any', value: value } as AnyValue;
+}
 function MK_LIST(value: Array<any> = []): RuntimeValue{
 	return { type: 'list', value: value } as ListValue;
 }
@@ -1321,7 +1317,6 @@ function VisitVariableDeclaration(context: VariableDeclaration, env: Environment
 		&& context.type != 'list'){
         if(env.lookupClass(context.type)){
             const className = env.lookupClass(context.type);
-
             let map = new Map<string, {type: ValueType, value: RuntimeValue}>();
 
             for(let statement of className.body){
@@ -1336,7 +1331,7 @@ function VisitVariableDeclaration(context: VariableDeclaration, env: Environment
                             returnStatement: (statement as FunctionDeclaration).returnStatement,
                             returnType: (statement as FunctionDeclaration).returnType,
                             type: 'userDefinedFunction'} as UserDefinedFunctionValue,
-                        type: (statement as VariableDeclaration).type})
+                        type: 'userDefinedFunction'})
                 }
             }
             value = MK_OBJECT(map);
@@ -1346,7 +1341,7 @@ function VisitVariableDeclaration(context: VariableDeclaration, env: Environment
         throw `Can not assign value of type ${value.type} to ${context.type}`
 
 	//@ts-ignore
-    return env.declareVariable(context.identifier, value, context.type,  false);
+    return env.declareVariable(context.identifier, value, context.type, false);
 }
 
 function VisitAssignmentExpression(context: AssignmentExpression, env: Environment): RuntimeValue {
@@ -1467,8 +1462,9 @@ function VisitClassDeclaration(context: ClassDeclaration, env: Environment): Run
 function VisitMemberExpression(context: MemberExpression, env: Environment): RuntimeValue {
     let object: ObjectValue = env.lookUpVariable((context.object as Identifier).symbol).value as ObjectValue;
 
-	if(!context.computed)
-    	return object.properties.get((context.property as Identifier).symbol);
+	if(!context.computed) {
+		return object.properties.get((context.property as Identifier).symbol);
+	}
 	else{
 		// @ts-ignore
 		return object.value[Visit(context.property, env).value];
@@ -1588,7 +1584,6 @@ function VisitRepeatStatement(context: RepeatStatement, env: Environment): Runti
 			// @ts-ignore
 			for(let i of end.value){
 				let newEnv = new Environment(env);
-				
 				newEnv.declareVariable(variableName, MK_ANY(i), 'any');
 				
 				for(let statement of context.body){
@@ -1880,6 +1875,7 @@ function VisitBinaryExpression(context: BinaryExpression, env: Environment): Run
 
     return MK_NULL();
 }
+
 function VisitNumericBinaryExpression(left: IntegerValue | FloatValue, right: IntegerValue | FloatValue, operator: string): IntegerValue | FloatValue{
     let result = 0;
 
@@ -1909,6 +1905,7 @@ function VisitNumericBinaryExpression(left: IntegerValue | FloatValue, right: In
 
     return { type: 'integer', value: result } as IntegerValue;
 }
+
 function VisitProgram(context: Program, env: Environment): RuntimeValue{
     let lastEvaluated: RuntimeValue = MK_NULL();
 
@@ -1918,8 +1915,10 @@ function VisitProgram(context: Program, env: Environment): RuntimeValue{
 
     return lastEvaluated;
 }
+
 function VisitIdentifier(context: Identifier, env: Environment): RuntimeValue{
-    return  env.lookUpVariable(context.symbol).value;
+	
+    return env.lookUpVariable(context.symbol).value;
 }
 
 function VisitObjectExpression(obj: ObjectLiteral, env: Environment): RuntimeValue{
@@ -1931,15 +1930,24 @@ function VisitObjectExpression(obj: ObjectLiteral, env: Environment): RuntimeVal
         const  type = property.type;
         const runtimeVal = (value == undefined) ? env.lookUpVariable(key) : Visit(value, env);
 
-        objects.properties.set(key, {value: runtimeVal, type});
+		//@ts-ignore
+        objects.properties.set(key, { value: runtimeVal.value, type });
     }
 
     return objects;
 }
 
 function VisitFunctionCall(call: CallExpression, env: Environment): RuntimeValue {
-    const func = env.lookupUserDefinedValue((call.caller as Identifier).symbol) as UserDefinedFunctionType;
-
+	let func;
+	
+	if(call.caller.kind != 'memberExpression') {
+		func = env.lookupUserDefinedValue((call.caller as Identifier).symbol) as UserDefinedFunctionType;
+	}
+	else {
+		func = (env.lookUpVariable(((call.caller as MemberExpression).object as Identifier).symbol).value as ObjectValue).properties.get(((call.caller as MemberExpression).property as Identifier).symbol);
+		func.returnType = func.value.returnType;
+	}
+		
     for(let i = 0; i < func.value.params.length; i++) {
         let param = func.value.params[i];
         let arg = Visit(call.args[i], env);
@@ -1955,7 +1963,7 @@ function VisitFunctionCall(call: CallExpression, env: Environment): RuntimeValue
             Visit(expression, env);
     }
 	
-    let returnValue = Visit((func.value.returnStatement as ReturnStatement).returnValue, env)
+    let returnValue = Visit((func.value.returnStatement as ReturnStatement).returnValue, env);
 
     if(returnValue.type != func.returnType)
         if(func.returnType != 'any')
@@ -1963,23 +1971,26 @@ function VisitFunctionCall(call: CallExpression, env: Environment): RuntimeValue
 
     return returnValue;
 }
-
 function VisitCallExpression(call: CallExpression, env: Environment): RuntimeValue{
-    const args = call.args.map((arg) => Visit(arg, env));
-    const func = Visit(call.caller, env);
-
-    if(func.type == 'userDefinedFunction'){
-        return VisitFunctionCall(call, new Environment(env));
-    }
-
-    if(func.type != 'nativeFunction'){
-        throw `'${func}' is not a function`;
-    }
-    
-    return  (func as NativeFunctionValue).call(args, env);
+	const args = call.args.map((arg) => Visit(arg, env));
+	let func = Visit(call.caller, env);
+	
+	if(func.type == 'userDefinedFunction'){
+		return VisitFunctionCall(call, new Environment(env));
+	}
+	
+	if(func.type != 'nativeFunction'){
+		throw `'${func}' is not a function`;
+	}
+	
+	// @ts-ignore
+	if(func.value){
+		// @ts-ignore
+		func = func.value
+	}
+	
+	return (func as NativeFunctionValue).call(args, env);
 }
-
-
 //Environment
 interface Variable{
     value: RuntimeValue;
@@ -2148,7 +2159,7 @@ class Environment {
 
     public lookupUserDefinedValue(name: string): UserDefinedFunctionType{
         const env = this.resolve(name);
-
+		
         if(env.userDefinedFunctions.has(name))
             return env.userDefinedFunctions.get(name);
         throw `'${name}' is not a function`;
@@ -2197,34 +2208,128 @@ function setupScope(env: Environment){
 
     function log(_args: RuntimeValue[], _env: Environment): RuntimeValue{
         _args.forEach((value) => {
+			if(value.type == 'object')
+				// @ts-ignore
+				console.log(value.properties);
 			// @ts-ignore
 			console.log(value.value);
 		})
 
         return MK_NULL();
     }
-
+	
     async function run(_args: RuntimeValue[], _env: Environment): Promise<RuntimeValue>{
         if(!_args[0])
-            throw `Expected argument`;
-        const fileName = (_args[0] as StringValue).value.slice(1,-1);
-        // @ts-ignore
-        const code = browserName == 'none'? await Deno.readTextFile(fileName): readTextFile(fileName);
+            throw `Expected 1 argument`;
+        const fileName = (_args[0] as StringValue).value;
+        const code = await readTextFile(fileName);
 
-        evaluate(code);
-
-        return MK_NULL();
+        return evaluate(code);
     }
-
     function getTime(_args: RuntimeValue[], _env: Environment): RuntimeValue{
 
         return MK_INT(Date.now());
     }
+	function range(_args: RuntimeValue[], _env: Environment): RuntimeValue{
+		let values = [];
+		// @ts-ignore
+		let start = _args[1] ? _args[1].value : 0;
+		// @ts-ignore
+		let end = _args[0].value;
+		// @ts-ignore
+		let inc = _args[2] ? _args[2].value : 1;
+		
+		for(let i = start; i < end; i += inc){
+			values.push({ value: i, type: 'integer' });
+		}
+		
+		return { type: 'list', value: values } as ListValue;
+	}
+	function js(_args: RuntimeValue[], _env: Environment): RuntimeValue{
+		const fileName = (_args[0] as StringValue).value;
+		const code = readTextFile(fileName);
+		
+		eval("(async () => {" + code + "})()");
+		
+		return MK_NULL();
+	}
+	function on(_args: RuntimeValue[], _env: Environment): RuntimeValue{
+		const select = (_args[0] as StringValue).value;
+		const event = (_args[1] as StringValue).value;
+		let handler = _args[2] as UserDefinedFunctionValue;
+		
+		// @ts-ignore
+		if(handler.value)
+			// @ts-ignore
+			handler = handler.value;
+		
+		document.querySelector(select).addEventListener(event, () => {
+			handler.body = handler.body.filter(e => e);
+			for(const expression of handler.body) {
+				if(expression)
+					Visit(expression, env);
+			}
+			
+			let returnValue = Visit((handler.returnStatement as ReturnStatement).returnValue, env);
+			
+			if(returnValue.type != handler.returnType)
+				if(handler.returnType != 'any')
+					throw `Cannot return type ${returnValue.type} as ${handler.returnType}`;
+			
+			return returnValue;
+		});
+		
+		return MK_NULL();
+	}
+	function sizeOf(_args: RuntimeValue[], _env: Environment): RuntimeValue{
+		return MK_INT((_args[0] as ListValue).value.length);
+	}
 	
     // @ts-ignore
     env.declareFunction('run', MK_NATIVE_FUNCTION(run, 'null'));
     env.declareFunction('log', MK_NATIVE_FUNCTION(log, 'null'));
 	env.declareFunction('getTime', MK_NATIVE_FUNCTION(getTime, 'integer'));
+	env.declareFunction('range', MK_NATIVE_FUNCTION(range, 'list'));
+	env.declareFunction('js', MK_NATIVE_FUNCTION(js, 'any'));
+	env.declareFunction('on', MK_NATIVE_FUNCTION(on, 'bool'));
+	env.declareFunction('sizeOf', MK_NATIVE_FUNCTION(sizeOf, 'integer'));
+	
+	let storage = new Map<string, { type: ValueType, value: RuntimeValue }>;
+	
+	function setItem(_args: RuntimeValue[], _env: Environment){
+		localStorage.setItem((_args[0] as StringValue).value, (_args[1] as StringValue).value);
+		storage.set('length', { type: 'integer', value: MK_INT(localStorage.length) });
+		return MK_NULL();
+	}
+	
+	function getItem(_args: RuntimeValue[], _env: Environment){
+		return MK_STRING(localStorage.getItem((_args[0] as StringValue).value));
+	}
+	
+	function removeItem(_args: RuntimeValue[], _env: Environment){
+		localStorage.removeItem((_args[0] as StringValue).value);
+		storage.set('length', { type: 'integer', value: MK_INT(localStorage.length) });
+		return MK_NULL();
+	}
+	function clear(_args: RuntimeValue[], _env: Environment){
+		localStorage.clear();
+		storage.set('length', { type: 'integer', value: MK_INT(localStorage.length) });
+		return MK_NULL();
+	}
+	
+	function key(_args: RuntimeValue[], _env: Environment){
+		// @ts-ignore
+		return MK_STRING(localStorage.key(_args[0].value));
+	}
+	
+	storage.set('set', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(setItem, 'null') });
+	storage.set('get', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(getItem, 'string') });
+	storage.set('remove', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(removeItem, 'null') });
+	storage.set('clear', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(clear, 'null') });
+	storage.set('key', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(clear, 'string') });
+	storage.set('length', { type: 'integer', value: MK_INT(localStorage.length) });
+	
+	env.declareVariable('localStorage', MK_OBJECT(storage), 'object', true);
 }
 
 //Main

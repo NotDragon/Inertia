@@ -262,18 +262,12 @@ function preProcessor(lexer) {
         }
     });
     lexer = lexer.filter(function (e) { return e; });
-    function processRunPreProcessor(args) {
-        eval(readTextFile(args[0]));
-    }
     for (var _i = 0, preProcessors_1 = preProcessors; _i < preProcessors_1.length; _i++) {
         var process_1 = preProcessors_1[_i];
         var tokens = process_1.split(/[ @;]/g).filter(function (e) { return e && e != ''; });
         var name_1 = tokens[0];
         tokens = tokens.slice(1);
         switch (name_1) {
-            case 'run':
-                processRunPreProcessor(tokens);
-                break;
         }
     }
     return lexer;
@@ -683,7 +677,9 @@ var Parser = /** @class */ (function () {
     Parser.prototype.parseClassBody = function () {
         switch (this.at().lexer) {
             case 'DEF':
-                return this.parseVariableDeclaration();
+                var value = this.parseVariableDeclaration();
+                this.expect(';', "Expected ';' but got ".concat(this.at()));
+                return value;
             case 'FUNC':
                 return this.parseFunctionDeclaration();
             default:
@@ -809,7 +805,6 @@ var Parser = /** @class */ (function () {
     Parser.prototype.parseWhile = function () {
         this.eat();
         this.expect('(', "expected '(' after if");
-        var elseIf;
         var condition = this.parseExpression();
         this.expect(')', "expected ')' after if");
         var body = this.parseBlock();
@@ -818,7 +813,6 @@ var Parser = /** @class */ (function () {
     Parser.prototype.parseDowhile = function () {
         this.eat();
         this.expect('(', "expected '(' after if");
-        var elseIf;
         var condition = this.parseExpression();
         this.expect(')', "expected ')' after if");
         var body = this.parseBlock();
@@ -886,6 +880,9 @@ function MK_NULL() {
 function MK_ANY(value) {
     return { type: 'any', value: value.value };
 }
+function MK_ANY_PURE(value) {
+    return { type: 'any', value: value };
+}
 function MK_LIST(value) {
     if (value === void 0) { value = []; }
     return { type: 'list', value: value };
@@ -918,7 +915,7 @@ function VisitVariableDeclaration(context, env) {
                             returnType: statement.returnType,
                             type: 'userDefinedFunction'
                         },
-                        type: statement.type });
+                        type: 'userDefinedFunction' });
                 }
             }
             value = MK_OBJECT(map);
@@ -1039,8 +1036,9 @@ function VisitClassDeclaration(context, env) {
 }
 function VisitMemberExpression(context, env) {
     var object = env.lookUpVariable(context.object.symbol).value;
-    if (!context.computed)
+    if (!context.computed) {
         return object.properties.get(context.property.symbol);
+    }
     else {
         // @ts-ignore
         return object.value[Visit(context.property, env).value];
@@ -1062,7 +1060,7 @@ function VisitHTMLStatement(context, env) {
             }
             if (currentVarName.trim()[0] == '<') {
                 var elementName = '';
-                var tokens = currentVarName.trim().split(/ |"/g);
+                var tokens = currentVarName.trim().split(/[ "]/g);
                 var properties = new Map();
                 elementName = tokens[0].slice(1);
                 for (var j = 1; j < tokens.length; j++) {
@@ -1138,6 +1136,7 @@ function VisitRepeatStatement(context, env) {
         var inc = context.inc ? Visit(context.inc, env) : MK_INT(1);
         var end = Visit(context.end, env);
         if (end.type == 'list') {
+            // @ts-ignore
             for (var _i = 0, _a = end.value; _i < _a.length; _i++) {
                 var i = _a[_i];
                 var newEnv = new Environment(env);
@@ -1438,12 +1437,20 @@ function VisitObjectExpression(obj, env) {
         var value = property.value;
         var type = property.type;
         var runtimeVal = (value == undefined) ? env.lookUpVariable(key) : Visit(value, env);
-        objects.properties.set(key, { value: runtimeVal, type: type });
+        //@ts-ignore
+        objects.properties.set(key, { value: runtimeVal.value, type: type });
     }
     return objects;
 }
 function VisitFunctionCall(call, env) {
-    var func = env.lookupUserDefinedValue(call.caller.symbol);
+    var func;
+    if (call.caller.kind != 'memberExpression') {
+        func = env.lookupUserDefinedValue(call.caller.symbol);
+    }
+    else {
+        func = env.lookUpVariable(call.caller.object.symbol).value.properties.get(call.caller.property.symbol);
+        func.returnType = func.value.returnType;
+    }
     for (var i = 0; i < func.value.params.length; i++) {
         var param = func.value.params[i];
         var arg = Visit(call.args[i], env);
@@ -1471,8 +1478,12 @@ function VisitCallExpression(call, env) {
     if (func.type != 'nativeFunction') {
         throw "'".concat(func, "' is not a function");
     }
-    var result = func.call(args, env);
-    return result;
+    // @ts-ignore
+    if (func.value) {
+        // @ts-ignore
+        func = func.value;
+    }
+    return func.call(args, env);
 }
 var Environment = /** @class */ (function () {
     function Environment(parentENV) {
@@ -1616,6 +1627,9 @@ function setupScope(env) {
     env.declareVariable('false', MK_BOOL(false), 'bool', true);
     function log(_args, _env) {
         _args.forEach(function (value) {
+            if (value.type == 'object')
+                // @ts-ignore
+                console.log(value.properties);
             // @ts-ignore
             console.log(value.value);
         });
@@ -1623,25 +1637,17 @@ function setupScope(env) {
     }
     function run(_args, _env) {
         return __awaiter(this, void 0, void 0, function () {
-            var fileName, code, _a;
-            return __generator(this, function (_b) {
-                switch (_b.label) {
+            var fileName, code;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
                     case 0:
                         if (!_args[0])
-                            throw "Expected argument";
-                        fileName = _args[0].value.slice(1, -1);
-                        if (!(browserName == 'none')) return [3 /*break*/, 2];
-                        return [4 /*yield*/, Deno.readTextFile(fileName)];
+                            throw "Expected 1 argument";
+                        fileName = _args[0].value;
+                        return [4 /*yield*/, readTextFile(fileName)];
                     case 1:
-                        _a = _b.sent();
-                        return [3 /*break*/, 3];
-                    case 2:
-                        _a = readTextFile(fileName);
-                        _b.label = 3;
-                    case 3:
-                        code = _a;
-                        evaluate(code);
-                        return [2 /*return*/, MK_NULL()];
+                        code = _a.sent();
+                        return [2 /*return*/, evaluate(code)];
                 }
             });
         });
@@ -1649,10 +1655,89 @@ function setupScope(env) {
     function getTime(_args, _env) {
         return MK_INT(Date.now());
     }
+    function range(_args, _env) {
+        var values = [];
+        // @ts-ignore
+        var start = _args[1] ? _args[1].value : 0;
+        // @ts-ignore
+        var end = _args[0].value;
+        // @ts-ignore
+        var inc = _args[2] ? _args[2].value : 1;
+        for (var i = start; i < end; i += inc) {
+            values.push({ value: i, type: 'integer' });
+        }
+        return { type: 'list', value: values };
+    }
+    function js(_args, _env) {
+        var fileName = _args[0].value;
+        var code = readTextFile(fileName);
+        eval("(async () => {" + code + "})()");
+        return MK_NULL();
+    }
+    function on(_args, _env) {
+        var select = _args[0].value;
+        var event = _args[1].value;
+        var handler = _args[2];
+        // @ts-ignore
+        if (handler.value)
+            // @ts-ignore
+            handler = handler.value;
+        document.querySelector(select).addEventListener(event, function () {
+            handler.body = handler.body.filter(function (e) { return e; });
+            for (var _i = 0, _a = handler.body; _i < _a.length; _i++) {
+                var expression = _a[_i];
+                if (expression)
+                    Visit(expression, env);
+            }
+            var returnValue = Visit(handler.returnStatement.returnValue, env);
+            if (returnValue.type != handler.returnType)
+                if (handler.returnType != 'any')
+                    throw "Cannot return type ".concat(returnValue.type, " as ").concat(handler.returnType);
+            return returnValue;
+        });
+        return MK_NULL();
+    }
+    function sizeOf(_args, _env) {
+        return MK_INT(_args[0].value.length);
+    }
     // @ts-ignore
     env.declareFunction('run', MK_NATIVE_FUNCTION(run, 'null'));
     env.declareFunction('log', MK_NATIVE_FUNCTION(log, 'null'));
     env.declareFunction('getTime', MK_NATIVE_FUNCTION(getTime, 'integer'));
+    env.declareFunction('range', MK_NATIVE_FUNCTION(range, 'list'));
+    env.declareFunction('js', MK_NATIVE_FUNCTION(js, 'any'));
+    env.declareFunction('on', MK_NATIVE_FUNCTION(on, 'bool'));
+    env.declareFunction('sizeOf', MK_NATIVE_FUNCTION(sizeOf, 'integer'));
+    var storage = new Map;
+    function setItem(_args, _env) {
+        localStorage.setItem(_args[0].value, _args[1].value);
+        storage.set('length', { type: 'integer', value: MK_INT(localStorage.length) });
+        return MK_NULL();
+    }
+    function getItem(_args, _env) {
+        return MK_STRING(localStorage.getItem(_args[0].value));
+    }
+    function removeItem(_args, _env) {
+        localStorage.removeItem(_args[0].value);
+        storage.set('length', { type: 'integer', value: MK_INT(localStorage.length) });
+        return MK_NULL();
+    }
+    function clear(_args, _env) {
+        localStorage.clear();
+        storage.set('length', { type: 'integer', value: MK_INT(localStorage.length) });
+        return MK_NULL();
+    }
+    function key(_args, _env) {
+        // @ts-ignore
+        return MK_STRING(localStorage.key(_args[0].value));
+    }
+    storage.set('set', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(setItem, 'null') });
+    storage.set('get', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(getItem, 'string') });
+    storage.set('remove', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(removeItem, 'null') });
+    storage.set('clear', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(clear, 'null') });
+    storage.set('key', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(clear, 'string') });
+    storage.set('length', { type: 'integer', value: MK_INT(localStorage.length) });
+    env.declareVariable('localStorage', MK_OBJECT(storage), 'object', true);
 }
 //Main
 var globalEnv = new Environment();
