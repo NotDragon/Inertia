@@ -3,13 +3,14 @@
     "@types/node": "^18.15.11"
   },
   "name": "cscript",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "main": "cscript.js",
-  "scripts": {
+	"type": "module",
+	"scripts": {
     "test": "jest"
   },
   "keywords": [],
-  "author": "",
+  "author": "Michalis Chatzittofi",
   "license": "ISC",
   "description": ""
 }

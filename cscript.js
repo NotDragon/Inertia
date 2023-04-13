@@ -515,8 +515,9 @@ var Parser = /** @class */ (function () {
         return left;
     };
     Parser.prototype.parseObjectExpression = function () {
-        if (this.at().lexer != '{')
+        if (this.at().lexer != '{') {
             return this.parseAdditiveExpression();
+        }
         this.eat();
         var properties = new Array();
         while (this.notEOF() && this.at().lexer != '}') {
@@ -568,7 +569,7 @@ var Parser = /** @class */ (function () {
     Parser.prototype.parseArgsList = function () {
         var args = [this.parseExpression()];
         while (this.at().lexer == ',' && this.eat()) {
-            args.push(this.parseAssignmentExpression());
+            args.push(this.parseExpression());
         }
         return args;
     };
@@ -1700,6 +1701,22 @@ function setupScope(env) {
     function sizeOf(_args, _env) {
         return MK_INT(_args[0].value.length);
     }
+    function getElement(_args, _env) {
+        var element = document.querySelector(_args[0].value);
+        var returnValue = new Map;
+        // @ts-ignore
+        // returnValue.set('value', { type: 'string', value: MK_STRING(element.value.toString()) });
+        // returnValue.set('innerHTML', { type: 'string', value: MK_STRING(element.innerHTML) });
+        // returnValue.set('id', { type: 'string', value: MK_STRING(element.id) });
+        // returnValue.set('id', { type: 'string', value: MK_STRING(element.id) });
+        for (var key_1 in element) {
+            var val = element[key_1];
+            if (typeof val == 'function')
+                continue;
+            returnValue.set(key_1, { type: 'any', value: MK_ANY_PURE(val) });
+        }
+        return MK_OBJECT(returnValue);
+    }
     // @ts-ignore
     env.declareFunction('run', MK_NATIVE_FUNCTION(run, 'null'));
     env.declareFunction('log', MK_NATIVE_FUNCTION(log, 'null'));
@@ -1708,6 +1725,7 @@ function setupScope(env) {
     env.declareFunction('js', MK_NATIVE_FUNCTION(js, 'any'));
     env.declareFunction('on', MK_NATIVE_FUNCTION(on, 'bool'));
     env.declareFunction('sizeOf', MK_NATIVE_FUNCTION(sizeOf, 'integer'));
+    env.declareFunction('getElement', MK_NATIVE_FUNCTION(getElement, 'object'));
     var storage = new Map;
     function setItem(_args, _env) {
         localStorage.setItem(_args[0].value, _args[1].value);

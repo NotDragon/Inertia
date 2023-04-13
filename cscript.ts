@@ -607,6 +607,7 @@ class Parser{
         while(this.at().value == '/' || this.at().value == '*' || this.at().value == '%'){
             const operator = this.eat().value;
             const right = this.parseCallMemberExpression();
+			
 
             left = {
                 kind: 'binaryExpression',
@@ -615,7 +616,7 @@ class Parser{
                 operator
             } as BinaryExpression
         }
-
+	
         return left;
     }
 
@@ -753,8 +754,9 @@ class Parser{
     }
 
     private parseObjectExpression(): Statement {
-        if(this.at().lexer != '{')
-            return this.parseAdditiveExpression()
+        if(this.at().lexer != '{') {
+			return this.parseAdditiveExpression();
+		}
 
         this.eat();
 
@@ -812,7 +814,7 @@ class Parser{
         const args = this.at().lexer == ')'
             ? []
             : this.parseArgsList();
-		
+	
         this.expect(')', `Expected ')' after function call`);
 
         return args;
@@ -821,7 +823,7 @@ class Parser{
         const args = [this.parseExpression()];
 
         while(this.at().lexer == ',' && this.eat()){
-            args.push(this.parseAssignmentExpression());
+            args.push(this.parseExpression());
         }
 
         return args;
@@ -841,7 +843,7 @@ class Parser{
     }
     private parseMemberExpression(): Expression{
         let object = this.parseConstant();
-
+		
         while(this.at().lexer == '.' || this.at().lexer == '['){
             const operator = this.eat();
             let property: Expression;
@@ -2284,6 +2286,27 @@ function setupScope(env: Environment){
 	function sizeOf(_args: RuntimeValue[], _env: Environment): RuntimeValue{
 		return MK_INT((_args[0] as ListValue).value.length);
 	}
+	function getElement(_args: RuntimeValue[], _env: Environment): RuntimeValue{
+		let element = document.querySelector((_args[0] as StringValue).value);
+		let returnValue = new Map<string, { type: ValueType, value: RuntimeValue }>;
+		
+		// @ts-ignore
+		// returnValue.set('value', { type: 'string', value: MK_STRING(element.value.toString()) });
+		// returnValue.set('innerHTML', { type: 'string', value: MK_STRING(element.innerHTML) });
+		// returnValue.set('id', { type: 'string', value: MK_STRING(element.id) });
+		// returnValue.set('id', { type: 'string', value: MK_STRING(element.id) });
+
+		
+		for(let key in element) {
+			let val = element[key];
+			if(typeof val == 'function')
+				continue;
+			
+			returnValue.set(key, { type: 'any', value: MK_ANY_PURE(val) });
+		}
+		
+		return MK_OBJECT(returnValue);
+	}
 	
     // @ts-ignore
     env.declareFunction('run', MK_NATIVE_FUNCTION(run, 'null'));
@@ -2293,6 +2316,7 @@ function setupScope(env: Environment){
 	env.declareFunction('js', MK_NATIVE_FUNCTION(js, 'any'));
 	env.declareFunction('on', MK_NATIVE_FUNCTION(on, 'bool'));
 	env.declareFunction('sizeOf', MK_NATIVE_FUNCTION(sizeOf, 'integer'));
+	env.declareFunction('getElement', MK_NATIVE_FUNCTION(getElement, 'object'));
 	
 	let storage = new Map<string, { type: ValueType, value: RuntimeValue }>;
 	
