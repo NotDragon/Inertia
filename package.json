@@ -5,8 +5,8 @@
   "name": "cscript",
   "version": "0.0.1",
   "main": "cscript.js",
-	"type": "module",
-	"scripts": {
+  "type": "module",
+  "scripts": {
     "test": "jest"
   },
   "keywords": [],

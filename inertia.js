@@ -1704,17 +1704,37 @@ function setupScope(env) {
     function getElement(_args, _env) {
         var element = document.querySelector(_args[0].value);
         var returnValue = new Map;
-        // @ts-ignore
-        // returnValue.set('value', { type: 'string', value: MK_STRING(element.value.toString()) });
-        // returnValue.set('innerHTML', { type: 'string', value: MK_STRING(element.innerHTML) });
-        // returnValue.set('id', { type: 'string', value: MK_STRING(element.id) });
-        // returnValue.set('id', { type: 'string', value: MK_STRING(element.id) });
         for (var key_1 in element) {
             var val = element[key_1];
             if (typeof val == 'function')
                 continue;
             returnValue.set(key_1, { type: 'any', value: MK_ANY_PURE(val) });
         }
+        function setInnerHTML(_args, _env) {
+            element.innerHTML = _args[0].value;
+            return MK_STRING(element.innerHTML);
+        }
+        function addInnerHTML(_args, _env) {
+            element.innerHTML += _args[0].value;
+            return MK_STRING(element.innerHTML);
+        }
+        function setAttribute(_args, _env) {
+            element.setAttribute(_args[0].value, _args[1].value);
+            return MK_NULL();
+        }
+        function getAttribute(_args, _env) {
+            return MK_STRING(element.getAttribute(_args[0].value));
+        }
+        function setCSSAttribute(_args, _env) {
+            var currentStyle = element.getAttribute('style');
+            element.setAttribute('style', "".concat(currentStyle, "; ").concat(_args[0].value, ": ").concat(_args[1].value));
+            return MK_STRING(element.getAttribute('style'));
+        }
+        returnValue.set('setInnerHTML', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(setInnerHTML, 'string') });
+        returnValue.set('setAttribute', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(setAttribute, 'string') });
+        returnValue.set('getAttribute', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(getAttribute, 'string') });
+        returnValue.set('setCSSAttribute', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(setCSSAttribute, 'string') });
+        returnValue.set('addInnerHTML', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(addInnerHTML, 'string') });
         return MK_OBJECT(returnValue);
     }
     // @ts-ignore
@@ -1764,7 +1784,6 @@ function evaluate(input, env) {
     var parser = new Parser();
     var program = parser.createAST(input);
     return Visit(program, env);
-    //def george = {name: 'George', age: 30, child:{name:'Anna',age:14}};
 }
 exports.evaluate = evaluate;
 var userAgent = navigator.userAgent;
@@ -1788,7 +1807,7 @@ else {
     browserName = "none";
 }
 if (browserName != 'none') {
-    var cstags = document.getElementsByTagName('cscript');
+    var cstags = document.getElementsByTagName('inertia');
     for (var i = 0; i < cstags.length; i++) {
         var tag = cstags[i];
         var code = '';

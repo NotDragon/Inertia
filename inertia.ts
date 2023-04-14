@@ -1308,7 +1308,7 @@ function VisitVariableDeclaration(context: VariableDeclaration, env: Environment
     let value = context.value
         ? Visit(context.value, env)
         : MK_NULL();
-
+	
     if(
         context.type != 'integer'
         && context.type != 'float'
@@ -2290,20 +2290,45 @@ function setupScope(env: Environment){
 		let element = document.querySelector((_args[0] as StringValue).value);
 		let returnValue = new Map<string, { type: ValueType, value: RuntimeValue }>;
 		
-		// @ts-ignore
-		// returnValue.set('value', { type: 'string', value: MK_STRING(element.value.toString()) });
-		// returnValue.set('innerHTML', { type: 'string', value: MK_STRING(element.innerHTML) });
-		// returnValue.set('id', { type: 'string', value: MK_STRING(element.id) });
-		// returnValue.set('id', { type: 'string', value: MK_STRING(element.id) });
-
-		
 		for(let key in element) {
 			let val = element[key];
+			
 			if(typeof val == 'function')
 				continue;
 			
 			returnValue.set(key, { type: 'any', value: MK_ANY_PURE(val) });
 		}
+		
+		function setInnerHTML(_args: RuntimeValue[], _env: Environment): RuntimeValue{
+			element.innerHTML = (_args[0] as StringValue).value;
+			
+			return MK_STRING(element.innerHTML);
+		}
+		function addInnerHTML(_args: RuntimeValue[], _env: Environment): RuntimeValue{
+			element.innerHTML += (_args[0] as StringValue).value;
+			
+			return MK_STRING(element.innerHTML);
+		}
+		function setAttribute(_args: RuntimeValue[], _env: Environment): RuntimeValue{
+			element.setAttribute((_args[0] as StringValue).value, (_args[1] as StringValue).value)
+			return MK_NULL();
+		}
+		function getAttribute(_args: RuntimeValue[], _env: Environment): RuntimeValue{
+			return MK_STRING(element.getAttribute((_args[0] as StringValue).value));
+		}
+		function setCSSAttribute(_args: RuntimeValue[], _env: Environment): RuntimeValue{
+			let currentStyle = element.getAttribute('style');
+			element.setAttribute('style', `${currentStyle}; ${(_args[0] as StringValue).value}: ${(_args[1] as StringValue).value}`);
+			
+			return MK_STRING(element.getAttribute('style'));
+		}
+		
+		
+		returnValue.set('setInnerHTML', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(setInnerHTML, 'string')});
+		returnValue.set('setAttribute', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(setAttribute, 'string')});
+		returnValue.set('getAttribute', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(getAttribute, 'string')});
+		returnValue.set('setCSSAttribute', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(setCSSAttribute, 'string')});
+		returnValue.set('addInnerHTML', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(addInnerHTML, 'string')});
 		
 		return MK_OBJECT(returnValue);
 	}
@@ -2363,8 +2388,6 @@ export function evaluate(input: string, env: Environment = globalEnv){
     const program = parser.createAST(input);
 	
     return Visit(program, env);
-
-    //def george = {name: 'George', age: 30, child:{name:'Anna',age:14}};
 }
 
 let userAgent = navigator.userAgent;
@@ -2385,7 +2408,7 @@ if(userAgent.match(/chrome|chromium|crios/i)){
 }
 
 if(browserName != 'none') {
-    let cstags = document.getElementsByTagName('cscript');
+    let cstags = document.getElementsByTagName('inertia');
 
     for (let i = 0; i < cstags.length; i++) {
         let tag = cstags[i];

@@ -11,5 +11,6 @@
     <orderEntry type="library" name="ohm-js" level="application" />
     <orderEntry type="library" name="lodash" level="application" />
     <orderEntry type="library" name="cscript" level="application" />
+    <orderEntry type="library" name="lodash" level="application" />
   </component>
 </module>
