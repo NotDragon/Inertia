@@ -1,14 +1,3 @@
 {{
-	<h1>To Dos</h1>
-	
-	<input id="text" type="text"><button id="add">Add</button>
-	<ul id="todos"></ul>
+
 }}
-
-func addToDo(){
-	def val = getElement('#text').value;
-	def i = getElement('#todos').addInnerHTML('"<li> ${ val } </li>"');
-	return 0;
-}
-
-on('#add', 'click', addToDo);
