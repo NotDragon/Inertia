@@ -58,6 +58,7 @@ var lexerRules = [
     ['dowhile', /dowhile/g],
     ['element', /element/g],
     ['when', /when/g],
+    ['pass', /pass/g],
     ['+=', /\+=/g],
     ['-=', /-=/g],
     ['/=', /\/=/g],
@@ -277,6 +278,7 @@ var isControl = ['ifStatement', 'repeatStatement', 'functionDeclaration', 'class
 var Parser = /** @class */ (function () {
     function Parser() {
         this.tokens = [];
+        this.currentPass = 0;
     }
     Parser.prototype.notEOF = function () {
         if (this.tokens[0])
@@ -338,6 +340,8 @@ var Parser = /** @class */ (function () {
                 return this.parseDowhile();
             case 'WHEN':
                 return this.parseWhenStatement();
+            case 'PASS':
+                return this.parsePassStatement();
             default:
                 return this.parseExpression();
         }
@@ -551,8 +555,9 @@ var Parser = /** @class */ (function () {
         this.expect('}', "Expected '}'");
         return { kind: 'objectLiteral', properties: properties };
     };
-    Parser.prototype.parseCallMemberExpression = function () {
-        var member = this.parseMemberExpression();
+    Parser.prototype.parseCallMemberExpression = function (i) {
+        if (i === void 0) { i = undefined; }
+        var member = this.parseMemberExpression(i);
         if (this.at().lexer == '(') {
             return this.parseCallExpression(member);
         }
@@ -582,10 +587,14 @@ var Parser = /** @class */ (function () {
         if (this.at().lexer == '(') {
             callExpression = this.parseCallExpression(callExpression);
         }
+        else if (this.at().lexer == '.') {
+            return this.parseCallMemberExpression(callExpression);
+        }
         return callExpression;
     };
-    Parser.prototype.parseMemberExpression = function () {
-        var object = this.parseConstant();
+    Parser.prototype.parseMemberExpression = function (i) {
+        if (i === void 0) { i = undefined; }
+        var object = i ? i : this.parseConstant();
         while (this.at().lexer == '.' || this.at().lexer == '[') {
             var operator = this.eat();
             var property = void 0;
@@ -850,6 +859,16 @@ var Parser = /** @class */ (function () {
             return this.parseComparisonExpression();
         }
     };
+    Parser.prototype.parsePassStatement = function () {
+        this.eat();
+        var secondToken = this.parseExpression();
+        if (this.at().lexer == ';') {
+            return { kind: "passStatement", condition: secondToken, id: "Pass ".concat(this.currentPass++) };
+        }
+        else {
+            return { kind: "passStatement", condition: secondToken, id: this.parseExpression() };
+        }
+    };
     return Parser;
 }());
 function MK_FLOAT(n) {
@@ -1036,7 +1055,11 @@ function VisitClassDeclaration(context, env) {
     return MK_NULL();
 }
 function VisitMemberExpression(context, env) {
-    var object = env.lookUpVariable(context.object.symbol).value;
+    var object;
+    if (context.object.kind == 'identifier')
+        object = env.lookUpVariable(context.object.symbol).value;
+    else if (context.object.kind == 'callExpression')
+        object = Visit(context.object, env);
     if (!context.computed) {
         return object.properties.get(context.property.symbol);
     }
@@ -1310,6 +1333,39 @@ function VisitListLiteral(context, env) {
     });
     return { type: "list", value: values };
 }
+function VisitPassStatement(context, env) {
+    var id = typeof context.id == 'string' ? context.id : Visit(context.id, env).value;
+    if (!Visit(context.condition, env).value) {
+        throw "Pass Statement: ".concat(id, " | FAILED");
+    }
+    console.log("Pass Statement: ".concat(id, " | PASSED"));
+    return MK_BOOL(true);
+}
+function VisitStringLiteral(context, env) {
+    if (context.value[0] == '"' && context.value[context.value.length - 1] == '"') {
+        var text = context.value.split('');
+        text[0] = undefined;
+        text[text.length - 1] = undefined;
+        for (var i = 0; i < text.length; i++) {
+            if (text[i] == '$' && text[i + 1] == '{') {
+                text[i] = text[i + 1] = undefined;
+                i += 2;
+                var currentToken = '';
+                while (text[i] != '}') {
+                    currentToken += text[i];
+                    text[i] = undefined;
+                    i++;
+                }
+                text[i] = undefined;
+                if (currentToken) {
+                    text[i - 1] = evaluate(currentToken.trim(), env).value;
+                }
+            }
+        }
+        return text.filter(function (e) { return e; }).join('');
+    }
+    return context.value;
+}
 function Visit(context, env) {
     switch (context.kind) {
         case 'integer':
@@ -1324,7 +1380,7 @@ function Visit(context, env) {
             };
         case 'stringLiteral':
             return {
-                value: context.value,
+                value: VisitStringLiteral(context, env),
                 type: 'string'
             };
         case 'boolLiteral':
@@ -1372,6 +1428,8 @@ function Visit(context, env) {
             return VisitWhenStatement(context, env);
         case "listLiteral":
             return VisitListLiteral(context, env);
+        case "passStatement":
+            return VisitPassStatement(context, env);
         default:
             throw ("Unknown token: ".concat(context, " of type ").concat(context.kind));
     }
@@ -1471,10 +1529,11 @@ function VisitFunctionCall(call, env) {
     return returnValue;
 }
 function VisitCallExpression(call, env) {
-    var args = call.args.map(function (arg) { return Visit(arg, env); });
-    var func = Visit(call.caller, env);
+    var currentEnv = new Environment(env);
+    var args = call.args.map(function (arg) { return Visit(arg, currentEnv); });
+    var func = Visit(call.caller, currentEnv);
     if (func.type == 'userDefinedFunction') {
-        return VisitFunctionCall(call, new Environment(env));
+        return VisitFunctionCall(call, currentEnv);
     }
     if (func.type != 'nativeFunction') {
         throw "'".concat(func, "' is not a function");
@@ -1484,7 +1543,7 @@ function VisitCallExpression(call, env) {
         // @ts-ignore
         func = func.value;
     }
-    return func.call(args, env);
+    return func.call(args, currentEnv);
 }
 var Environment = /** @class */ (function () {
     function Environment(parentENV) {
@@ -1685,12 +1744,13 @@ function setupScope(env) {
             handler = handler.value;
         document.querySelector(select).addEventListener(event, function () {
             handler.body = handler.body.filter(function (e) { return e; });
+            var newEnv = new Environment(env);
             for (var _i = 0, _a = handler.body; _i < _a.length; _i++) {
                 var expression = _a[_i];
                 if (expression)
-                    Visit(expression, env);
+                    Visit(expression, newEnv);
             }
-            var returnValue = Visit(handler.returnStatement.returnValue, env);
+            var returnValue = Visit(handler.returnStatement.returnValue, newEnv);
             if (returnValue.type != handler.returnType)
                 if (handler.returnType != 'any')
                     throw "Cannot return type ".concat(returnValue.type, " as ").concat(handler.returnType);
@@ -1708,14 +1768,18 @@ function setupScope(env) {
             var val = element[key_1];
             if (typeof val == 'function')
                 continue;
-            returnValue.set(key_1, { type: 'any', value: MK_ANY_PURE(val) });
+            returnValue.set(key_1, { type: 'any', value: val });
         }
         function setInnerHTML(_args, _env) {
             element.innerHTML = _args[0].value;
             return MK_STRING(element.innerHTML);
         }
         function addInnerHTML(_args, _env) {
-            element.innerHTML += _args[0].value;
+            _args.forEach(function (value) {
+                if (value.type == 'object')
+                    element.innerHTML += value.properties;
+                element.innerHTML += value.value;
+            });
             return MK_STRING(element.innerHTML);
         }
         function setAttribute(_args, _env) {

@@ -20,6 +20,7 @@ const lexerRules = [
 	['dowhile', /dowhile/g],
 	['element', /element/g],
 	['when', /when/g],
+	['pass', /pass/g],
     ['+=', /\+=/g],
     ['-=', /-=/g],
     ['/=', /\/=/g],
@@ -288,6 +289,7 @@ type NodeType =
 	| 'whileStatement'
 	| 'dowhileStatement'
 	| 'whenStatement'
+	| 'passStatement'
 	
 	// expressions
     | 'constant'
@@ -477,10 +479,16 @@ interface WhenStatement extends Statement{
 	body: Statement[];
 }
 
+interface PassStatement extends Statement{
+	kind: 'passStatement';
+	id: Expression | string;
+	condition: Statement;
+}
 //Parser
 class Parser{
 
     private tokens: Token[] = [];
+	private currentPass = 0;
 
     private notEOF(): boolean{
         if(this.tokens[0])
@@ -552,6 +560,8 @@ class Parser{
 				return this.parseDowhile();
 			case 'WHEN':
 				return this.parseWhenStatement();
+			case 'PASS':
+				return this.parsePassStatement();
             default:
                 return this.parseExpression()
         }
@@ -800,8 +810,8 @@ class Parser{
         return { kind: 'objectLiteral', properties } as ObjectLiteral;
     }
 
-    private parseCallMemberExpression(): Expression {
-        const member = this.parseMemberExpression();
+    private parseCallMemberExpression(i:Expression = undefined): Expression {
+        const member = this.parseMemberExpression(i);
 		
         if(this.at().lexer == '('){
             return this.parseCallExpression(member);
@@ -837,18 +847,20 @@ class Parser{
 		
         if(this.at().lexer == '('){
             callExpression = this.parseCallExpression(callExpression);
-        }
-
+        }else if(this.at().lexer == '.'){
+			return this.parseCallMemberExpression(callExpression);
+		}
+		
         return callExpression;
     }
-    private parseMemberExpression(): Expression{
-        let object = this.parseConstant();
+    private parseMemberExpression(i:Expression = undefined): Expression{
+        let object = i ? i: this.parseConstant();
 		
         while(this.at().lexer == '.' || this.at().lexer == '['){
             const operator = this.eat();
             let property: Expression;
             let computed: boolean;
-
+ 
             if(operator.lexer == '.'){
                 computed = false;
                 property = this.parseConstant();
@@ -877,14 +889,13 @@ class Parser{
 		
 		this.expect('{', `Expected '{'`);
 		while(this.at().lexer != '}'){
-			let statement = this.parseStatement()
+			let statement = this.parseStatement();
 			body.push(statement);
 			if(!isControl.includes(statement.kind)){
 				this.expect(';', `Expected ';' but got ${this.at().value}`);
 			}
 		}
 		this.expect('}', `Expected '}'`);
-		
 		return body;
 	}
     private parseFunctionDeclaration(): Statement {
@@ -1184,6 +1195,17 @@ class Parser{
 			return this.parseComparisonExpression();
 		}
 	}
+	
+	private parsePassStatement() {
+		this.eat();
+		
+		let secondToken = this.parseExpression();
+		if(this.at().lexer == ';') {
+			return { kind: "passStatement", condition: secondToken, id: `Pass ${this.currentPass++}` } as PassStatement;
+		}else{
+			return { kind: "passStatement", condition: secondToken, id: this.parseExpression() } as PassStatement;
+		}
+	}
 }
 
 //values
@@ -1301,7 +1323,6 @@ function MK_ANY_PURE(value: any): RuntimeValue{
 function MK_LIST(value: Array<any> = []): RuntimeValue{
 	return { type: 'list', value: value } as ListValue;
 }
-
 
 //interpreter
 function VisitVariableDeclaration(context: VariableDeclaration, env: Environment): RuntimeValue {
@@ -1462,8 +1483,12 @@ function VisitClassDeclaration(context: ClassDeclaration, env: Environment): Run
 }
 
 function VisitMemberExpression(context: MemberExpression, env: Environment): RuntimeValue {
-    let object: ObjectValue = env.lookUpVariable((context.object as Identifier).symbol).value as ObjectValue;
-
+	let object: ObjectValue;
+	if(context.object.kind == 'identifier')
+		object = env.lookUpVariable((context.object as Identifier).symbol).value as ObjectValue;
+	else if(context.object.kind == 'callExpression')
+		object = Visit(context.object, env) as ObjectValue;
+	
 	if(!context.computed) {
 		return object.properties.get((context.property as Identifier).symbol);
 	}
@@ -1568,7 +1593,6 @@ function VisitElementDeclaration(context: Element, env: Environment): RuntimeVal
 	env.declareElement(context.name,
 		{type: "element", body: context.body, properties} as ElementValue
 	)
-	
 	return undefined;
 }
 
@@ -1746,7 +1770,7 @@ function VisitDowhileStatement(context: WhileStatement, env: Environment): Runti
 function VisitWhenStatement(context: WhenStatement, env: Environment): RuntimeValue {
 	for(const trigger of context.triggers){
 		env.createHandler((trigger as Identifier).symbol, () => {
-			let newEnv = new Environment(env)
+			let newEnv = new Environment(env);
 			for(const expression of context.body){
 				Visit(expression, newEnv);
 			}
@@ -1766,6 +1790,47 @@ function VisitListLiteral(context: ListLiteral, env: Environment): RuntimeValue 
 	return { type: "list", value: values } as ListValue;
 }
 
+function VisitPassStatement(context: PassStatement, env: Environment): RuntimeValue {
+	let id = typeof context.id == 'string' ? context.id: (Visit(context.id, env) as StringValue).value
+	
+	if(!(Visit(context.condition, env) as BoolValue).value) {
+		throw `Pass Statement: ${id} | FAILED`;
+	}
+	
+	console.log(`Pass Statement: ${id} | PASSED`);
+	
+	return MK_BOOL(true);
+}
+
+function VisitStringLiteral(context: StringLiteral, env: Environment): string {
+	if(context.value[0] == '"' && context.value[context.value.length - 1] == '"'){
+		let text = context.value.split('');
+		
+		text[0] = undefined;
+		text[text.length - 1] = undefined;
+		
+		for(let i = 0; i < text.length; i++){
+			if(text[i] == '$' && text[i + 1] == '{'){
+				text[i] = text[i + 1] = undefined;
+				i += 2;
+				let currentToken = '';
+				while(text[i] != '}'){
+					currentToken += text[i];
+					text[i] = undefined;
+					i++;
+				}
+				text[i] = undefined;
+				if(currentToken){
+					text[i - 1] = (evaluate(currentToken.trim(), env) as StringValue).value;
+				}
+			}
+		}
+		
+		return text.filter(e => e).join('');
+	}
+	return context.value;
+}
+
 function Visit(context: Statement, env: Environment): RuntimeValue {
     switch (context.kind){
         case 'integer':
@@ -1782,7 +1847,7 @@ function Visit(context: Statement, env: Environment): RuntimeValue {
 
         case 'stringLiteral':
             return {
-                value: (context as StringLiteral).value,
+                value: VisitStringLiteral(context as StringLiteral, env),
                 type: 'string'
             } as StringValue;
 
@@ -1851,7 +1916,10 @@ function Visit(context: Statement, env: Environment): RuntimeValue {
 	
 		case "listLiteral":
 			return VisitListLiteral(context as ListLiteral, env);
-	
+		
+		case "passStatement":
+			return VisitPassStatement(context as PassStatement, env);
+		
 		default:
             throw (`Unknown token: ${context} of type ${context.kind}`);
     }
@@ -1949,7 +2017,7 @@ function VisitFunctionCall(call: CallExpression, env: Environment): RuntimeValue
 		func = (env.lookUpVariable(((call.caller as MemberExpression).object as Identifier).symbol).value as ObjectValue).properties.get(((call.caller as MemberExpression).property as Identifier).symbol);
 		func.returnType = func.value.returnType;
 	}
-		
+	
     for(let i = 0; i < func.value.params.length; i++) {
         let param = func.value.params[i];
         let arg = Visit(call.args[i], env);
@@ -1974,11 +2042,12 @@ function VisitFunctionCall(call: CallExpression, env: Environment): RuntimeValue
     return returnValue;
 }
 function VisitCallExpression(call: CallExpression, env: Environment): RuntimeValue{
-	const args = call.args.map((arg) => Visit(arg, env));
-	let func = Visit(call.caller, env);
+	let currentEnv = new Environment(env);
+	const args = call.args.map((arg) => Visit(arg, currentEnv));
+	let func = Visit(call.caller, currentEnv);
 	
 	if(func.type == 'userDefinedFunction'){
-		return VisitFunctionCall(call, new Environment(env));
+		return VisitFunctionCall(call, currentEnv);
 	}
 	
 	if(func.type != 'nativeFunction'){
@@ -1991,7 +2060,7 @@ function VisitCallExpression(call: CallExpression, env: Environment): RuntimeVal
 		func = func.value
 	}
 	
-	return (func as NativeFunctionValue).call(args, env);
+	return (func as NativeFunctionValue).call(args, currentEnv);
 }
 //Environment
 interface Variable{
@@ -2215,7 +2284,7 @@ function setupScope(env: Environment){
 				console.log(value.properties);
 			// @ts-ignore
 			console.log(value.value);
-		})
+		});
 
         return MK_NULL();
     }
@@ -2267,12 +2336,13 @@ function setupScope(env: Environment){
 		
 		document.querySelector(select).addEventListener(event, () => {
 			handler.body = handler.body.filter(e => e);
+			let newEnv = new Environment(env);
 			for(const expression of handler.body) {
 				if(expression)
-					Visit(expression, env);
+					Visit(expression, newEnv);
 			}
 			
-			let returnValue = Visit((handler.returnStatement as ReturnStatement).returnValue, env);
+			let returnValue = Visit((handler.returnStatement as ReturnStatement).returnValue, newEnv);
 			
 			if(returnValue.type != handler.returnType)
 				if(handler.returnType != 'any')
@@ -2296,7 +2366,7 @@ function setupScope(env: Environment){
 			if(typeof val == 'function')
 				continue;
 			
-			returnValue.set(key, { type: 'any', value: MK_ANY_PURE(val) });
+			returnValue.set(key, { type: 'any', value: val });
 		}
 		
 		function setInnerHTML(_args: RuntimeValue[], _env: Environment): RuntimeValue{
@@ -2305,7 +2375,11 @@ function setupScope(env: Environment){
 			return MK_STRING(element.innerHTML);
 		}
 		function addInnerHTML(_args: RuntimeValue[], _env: Environment): RuntimeValue{
-			element.innerHTML += (_args[0] as StringValue).value;
+			_args.forEach((value) => {
+				if(value.type == 'object')
+					element.innerHTML += (value as ObjectValue).properties;
+				element.innerHTML += (value as StringValue).value;
+			});
 			
 			return MK_STRING(element.innerHTML);
 		}
@@ -2322,7 +2396,6 @@ function setupScope(env: Environment){
 			
 			return MK_STRING(element.getAttribute('style'));
 		}
-		
 		
 		returnValue.set('setInnerHTML', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(setInnerHTML, 'string')});
 		returnValue.set('setAttribute', { type: 'nativeFunction', value: MK_NATIVE_FUNCTION(setAttribute, 'string')});
