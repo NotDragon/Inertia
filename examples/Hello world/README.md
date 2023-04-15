@@ -1,6 +1,6 @@
 # Hello World in Inertia
 ### Getting started with Inertia
-To get started with Inertia, you need to add `inertia.js` to your working directory
+To get started with Inertia, you need to add `inertia.js` from the [repo](https://github.com/NotDragon/Inertia/src), to your working directory
 Then you need to include it in you html like this:
 ```HTML
 <!DOCTYPE html>
