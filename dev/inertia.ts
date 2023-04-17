@@ -348,6 +348,8 @@ let isControl: NodeType[] = [
 ];
 interface Statement {
     kind: NodeType;
+	starts?: number;
+	ends?: number;
 }
 
 interface Expression extends Statement{}
@@ -367,7 +369,6 @@ interface Element extends Statement{
 
 interface VariableDeclaration extends Statement{
     kind: 'variableDeclaration';
-
     isNull: boolean;
     identifier: string;
     value?: Expression;
@@ -526,7 +527,7 @@ interface PassStatement extends Statement{
 	condition: Statement;
 }
 //Parser
-function throwError(msg: string, token: number){
+function throwError(msg: string, token: number, size = 1){
 	let tokens = tokenize(code);
 	
 	tokens = tokens.filter(e => e);
@@ -554,17 +555,26 @@ function throwError(msg: string, token: number){
 				}
 			}
 		}
-		
-		if(tokens[i] == ' ' || tokens[i] == '\t' || tokens[i] == '\n'){
+		if(tokens[i] == ' ' || tokens[i] == '\t' || tokens[i] == '\n' || !tokens[i] || tokens[i] == '' || tokens[i] == '\r'){
 			token++;
 		}
 		
 		if(i == token){
-			special = tokens[i];
+			out = out.slice(0, -tokens[i].length);
+			for(let k = 0; k < size; k++) {
+				out += tokens[i];
+				special += tokens[token + k];
+				if(special[k] == ' ' || special[k] == '\t' || special[k] == '\n' || !special[k] || special[k] == '' || special[k] == '\r'){
+					size++;
+				}
+				i++;
+			}
+			i--;
+			
 			space = spaceFromNewline;
 			errorMsg = `^ ${msg}`;
 			
-			beforeError = out.slice(0, -tokens[i].length);
+			beforeError = out.slice(0, -special.length);
 			out = '';
 			
 			while(tokens[i] != '\n' && i != tokens.length - 1){
@@ -611,7 +621,7 @@ class Parser{
 
         const program: Program = {
             kind: 'program',
-            body: []
+            body: [],
         };
 
         while(this.notEOF()){
@@ -645,38 +655,98 @@ class Parser{
     private parseStatement(): Statement{
         switch(this.at().lexer){
             case 'DEF':
-                return this.parseVariableDeclaration();
-            case 'FUNC':
-                return this.parseFunctionDeclaration();
+				let startsV = this.currentToken;
+				let contextV = this.parseVariableDeclaration() as VariableDeclaration;
+				contextV.starts = startsV;
+				contextV.ends = this.currentToken;
+				return contextV;
+			case 'FUNC':
+				let startsF = this.currentToken;
+                let contextF = this.parseFunctionDeclaration() as FunctionDeclaration;
+				contextF.starts = startsF;
+				contextF.ends = this.currentToken;
+				return contextF;
             case 'RETURN':
-                return this.parseReturnStatement();
+				let startsR = this.currentToken;
+				let contextR =  this.parseReturnStatement() as ReturnStatement;
+				contextR.starts = startsR;
+				contextR.ends = this.currentToken;
+				return contextR;
             case 'CLASS':
-                return this.parseClassDeclaration();
+				let startsC = this.currentToken;
+				let contextC =  this.parseClassDeclaration() as ClassDeclaration;
+				contextC.starts = startsC;
+				contextC.ends = this.currentToken;
+				return contextC;
             case 'HTMLSTART':
-                return this.parseHTMLStart();
+				let startsH = this.currentToken;
+				let contextH =  this.parseHTMLStart() as HtmlStatement;
+				contextH.starts = startsH;
+				contextH.ends = this.currentToken;
+				return contextH;
 			case 'ELEMENT':
-				return this.parseElementDeclaration();
+				let startsE = this.currentToken;
+				let contextE =  this.parseElementDeclaration() as Element;
+				contextE.starts = startsE;
+				contextE.ends = this.currentToken;
+				return contextE;
 			case 'REPEAT':
-				return this.parseRepeatStatement();
+				let startsRe = this.currentToken;
+				let contextRe =  this.parseRepeatStatement() as RepeatStatement;
+				contextRe.starts = startsRe;
+				contextRe.ends = this.currentToken;
+				return contextRe;
 			case 'IF':
-				return this.parseIfStatement();
+				let startsI = this.currentToken;
+				let contextI =  this.parseIfStatement() as IfStatement;
+				contextI.starts = startsI;
+				contextI.ends = this.currentToken;
+				return contextI;
 			case 'BREAK':
-				return this.parseBreakStatement();
+				let startsB = this.currentToken;
+				let contextB =  this.parseBreakStatement();
+				contextB.starts = startsB;
+				contextB.ends = this.currentToken;
+				return contextB;
 			case 'CONTINUE':
-				return this.parseContinueStatement();
+				let startsCo = this.currentToken;
+				let contextCo =  this.parseContinueStatement();
+				contextCo.starts = startsCo;
+				contextCo.ends = this.currentToken;
+				return contextCo;
 			case 'WHILE':
-				return this.parseWhile();
+				let startsW = this.currentToken;
+				let contextW =  this.parseWhile() as WhileStatement;
+				contextW.starts = startsW;
+				contextW.ends = this.currentToken;
+				return contextW;
 			case 'DOWHILE':
-				return this.parseDowhile();
+				let startsD = this.currentToken;
+				let contextD =  this.parseDowhile() as DowhileStatement;
+				contextD.starts = startsD;
+				contextD.ends = this.currentToken;
+				return contextD;
 			case 'WHEN':
-				return this.parseWhenStatement();
+				let startsWh = this.currentToken;
+				let contextWh =  this.parseWhenStatement() as WhenStatement;
+				contextWh.starts = startsWh;
+				contextWh.ends = this.currentToken;
+				return contextWh;
 			case 'PASS':
-				return this.parsePassStatement();
+				let startsP = this.currentToken;
+				let contextP =  this.parsePassStatement() as PassStatement;
+				contextP.starts = startsP;
+				contextP.ends = this.currentToken;
+				return contextP;
 			case 'COMMENT':
 				this.eat();
 				return this.parseStatement();
             default:
-                return this.parseExpression()
+				let startsEx = this.currentToken;
+				let contextEx =  this.parseExpression() as Expression;
+				contextEx.starts = startsEx;
+				contextEx.ends = this.currentToken;
+				return contextEx;
         }
     }
     private parseExpression(): Expression{
@@ -846,7 +916,7 @@ class Parser{
             value.type += 'Literal';
             value.kind = value.type;
         }
-	
+		
 		return {
                 kind: 'variableDeclaration',
                 isNull: type == null,
@@ -1455,7 +1525,7 @@ function VisitVariableDeclaration(context: VariableDeclaration, env: Environment
         && context.type != 'object'
         && context.type != 'null'
 		&& context.type != 'list'){
-        if(env.lookupClass(context.type)){
+        if(env.isClass(context.type)){
             const className = env.lookupClass(context.type);
             let map = new Map<string, {type: ValueType, value: RuntimeValue}>();
 
@@ -1476,10 +1546,10 @@ function VisitVariableDeclaration(context: VariableDeclaration, env: Environment
             }
             value = MK_OBJECT(map);
         }else
-            throw `Unknown type '${context.type}'`;
-    }else if(value.type != context.type && context.type != 'null')
-        throw `Can not assign value of type ${value.type} to ${context.type}`
-	
+            throwError(`Unknown type '${context.type}'`, context.starts, context.ends - context.starts + 1);
+    }else if(value.type != context.type && context.type != 'null') {
+		throwError(`Can not assign value of type ${value.type} to ${context.type}`, context.value.starts, context.value.ends - context.value.starts + 1);
+	}
 	if(value.type == 'userDefinedFunction'){
 		return env.declareUserDefinedFunction(context.identifier, (value as UserDefinedFunctionValue).body, (value as UserDefinedFunctionValue).returnType, (value as UserDefinedFunctionValue).params, (value as UserDefinedFunctionValue).returnStatement);
 	}
@@ -1489,7 +1559,7 @@ function VisitVariableDeclaration(context: VariableDeclaration, env: Environment
 
 function VisitAssignmentExpression(context: AssignmentExpression, env: Environment): RuntimeValue {
     if(context.left.kind != 'identifier' && context.left.kind != 'memberExpression')
-        throw `Invalid left value type in ${JSON.stringify(context.left)}`;
+        throwError(`Invalid left value type in ${JSON.stringify(context.left)}`, context.left.starts, context.left.starts - context.left.ends);
 
     if(context.left.kind != 'memberExpression') {
         const name = (context.left as Identifier).symbol;
@@ -1498,7 +1568,7 @@ function VisitAssignmentExpression(context: AssignmentExpression, env: Environme
         if (env.lookUpVariable(name).type == null) {
             env.assignVariableType(name, value.type);
         } else if (env.lookUpVariable(name).type != value.type)
-            throw `Cannot assign type ${value.type} to type ${env.lookUpVariable(name)[1]}`
+            throwError(`Cannot assign type ${value.type} to type ${env.lookUpVariable(name)[1]}`, context.starts, context.starts - context.ends);
 
         if (context.operator == '=')
             return env.assignVariable(name, value);
@@ -1636,7 +1706,8 @@ function VisitHTMLStatement(context: HtmlStatement, env: Environment): RuntimeVa
 			
 			if(currentVarName.trim()[0] == '<'){
 				let elementName = '';
-				let tokens  = currentVarName.trim().split(/[ "]/g);
+				let tokens  = currentVarName.trim().split(/[ "=/]/g);
+				tokens = tokens.filter(e => e && e != '' && e != ' ');
 				let properties = new Map<string, string>();
 				
 				elementName = tokens[0].slice(1);
@@ -1647,12 +1718,12 @@ function VisitHTMLStatement(context: HtmlStatement, env: Environment): RuntimeVa
 					else if(!tokens[j])
 						continue;
 					
-					let name = tokens[j].slice(0, -1);
+					let name = tokens[j];
 					let value = tokens[++j];
 					
 					if(value.trim()[0] == '(' && value.trim()[value.trim().length - 1] == ')'){
 						// @ts-ignore
-						value = evaluate(value.slice(0, -1).slice(1), env).value.value;
+						value = evaluate(value.trim().slice(0, -1).slice(1).trim(), env).value;
 					}
 					
 					properties.set(name, value);
@@ -1728,18 +1799,22 @@ function VisitRepeatStatement(context: RepeatStatement, env: Environment): Runti
 		
 		if(end.type == 'list' || end.type == 'string'){
 			if(!context.for)
-				throw 'Cannot use repeat statement to iterate, use for loop instead';
+				throwError('Cannot use repeat statement to iterate, use for loop instead', context.starts, context.starts - context.ends);
 			// @ts-ignore
 			for(let i of end.value){
 				let newEnv = new Environment(env);
-				newEnv.declareVariable(variableName, MK_ANY_PURE(i), 'any');
+				if(end.type == 'string')
+					newEnv.declareVariable(variableName, MK_ANY_PURE(i), 'string');
+				else
+					newEnv.declareVariable(variableName, MK_ANY(i), 'any');
+					
 				for(let statement of context.body){
 					Visit(statement, newEnv);
 				}
 			}
 		}else {
 			if(context.for)
-				throw 'Cannot use for loop, use repeat statement instead';
+				throwError('Cannot use for loop, use repeat statement instead', context.starts, context.starts - context.ends);
 			//@ts-ignore
 			for (let i = start.value; i < end.value; i += inc.value) {
 				let newEnv = new Environment(env);
@@ -2051,7 +2126,7 @@ function Visit(context: Statement, env: Environment): RuntimeValue {
 			return VisitPassStatement(context as PassStatement, env);
 		
 		default:
-            throw (`Unknown token: ${context} of type ${context.kind}`);
+            throwError(`Unknown token: ${context} of type ${context.kind}`, context.starts, context.starts - context.ends);
     }
 }
 
@@ -2151,9 +2226,8 @@ function VisitFunctionCall(call: CallExpression, env: Environment): RuntimeValue
     for(let i = 0; i < func.value.params.length; i++) {
         let param = func.value.params[i];
         let arg = Visit(call.args[i], env);
-
         if(arg.type != param.type)
-            throw `Cannot assign variable of type '${arg.type}' to '${param.type}'`
+            throwError(`Cannot assign variable of type '${arg.type}' to '${param.type}'`, call.starts, call.starts - call.ends);
 
         env.declareVariable(param.name, arg, param.type);
     }
@@ -2165,7 +2239,7 @@ function VisitFunctionCall(call: CallExpression, env: Environment): RuntimeValue
 	
     let returnValue = Visit((func.value.returnStatement as ReturnStatement).returnValue, env);
     if(returnValue.type != func.returnType && func.returnType != 'any')
-            throw `Cannot return type ${returnValue.type} as ${func.returnType}`;
+            throwError(`Cannot return type ${returnValue.type} as ${func.returnType}`, call.starts, call.starts - call.ends);
 
     return returnValue;
 }
@@ -2179,7 +2253,7 @@ function VisitCallExpression(call: CallExpression, env: Environment): RuntimeVal
 	}
 	
 	if(func.type != 'nativeFunction'){
-		throw `'${func}' is not a function`;
+		throwError(`'${func}' is not a function`, call.starts, call.starts - call.ends);
 	}
 	
 	// @ts-ignore
@@ -2236,7 +2310,7 @@ class Environment {
 
     public declareVariable(name: string, value: RuntimeValue, type: ValueType, isConstant: boolean = false): RuntimeValue{
         if(this.variables.has(name) || this.constants.has(name)){
-            throw `Variable ${name} is already declared`;
+            throw`Variable ${name} is already declared`;
         }
 
         if(!isConstant)
@@ -2379,6 +2453,15 @@ class Environment {
             return env.classes.get(name);
         return undefined;
     }
+	
+	public isClass(name: string): boolean{
+		if(this.classes.has(name))
+			return true;
+		if(this.parent == undefined)
+			return false;
+		
+		return this.parent.isClass(name);
+	}
 	
 	public lookupElement(name: string): ElementValue{
 		const env = this.resolve(name);
