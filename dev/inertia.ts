@@ -13,6 +13,7 @@ const lexerRules = [
 	['break', /break/g],
 	['continue', /continue/g],
     ['else', /else/g],
+	['common', /common/g],
     ['while', /while/g],
     ['dowhile', /dowhile/g],
     ['htmlStart', /{{/g],
@@ -34,7 +35,9 @@ const lexerRules = [
     ['>=', />=/g],
     ['<=', /<=/g],
     ['sub', /-/g],
+	['comment', /\/\/.*/g],
     ['repeat', /repeat/g],
+	['repeat', /for/g],
     ['return', /return/g],
     ['func', /func/g],
     ['class', /class/g],
@@ -89,46 +92,48 @@ function decodeHTML(text) {
         .replace("#039;", "'")
     ;
 }
-function lex(code) {
-    let tokens = [];
+
+function tokenize(code){
+	let tokens = [];
 	
-    let currentToken:string = '';
-
-    let inHTML = false;
+	let currentToken:string = '';
+	
+	let inHTML = false;
 	let inPreprocessor = false;
-
-    for (let i = 0; i < code.length; i++){
-        let character = code[i];
-
-        character.replace('\t', '');
-        character.replace('\n', '');
+	
+	for (let i = 0; i < code.length; i++){
+		let character = code[i];
 		
-        if (character == ';'
-            ||character == ','
-            || character == '('
-            || character == ')'
-            || character == '{'
-            || character == '}'
-            || character == '['
-            || character == ']'
-            || character == '\n'
-            || character == '\t'
-            || character == ' '
+		character.replace('\t', '');
+		character.replace('\n', '');
+		
+		if (character == ';'
+			||character == ','
+			|| character == '('
+			|| character == ')'
+			|| character == '{'
+			|| character == '}'
+			|| character == '['
+			|| character == ']'
+			|| character == '\n'
+			|| character == '\t'
+			|| character == ' '
 			|| character == '='
 			|| character == '!'
 			|| character == '>'
 			|| character == '<'
-            || character == ':'
+			|| character == ':'
 			|| character == '.'
 			|| character == "'"
 			|| character == '@'
-        ){
-            if(character == '.'){
-                if(currentToken.match(/-?([0-9]+)/g)){
-                    currentToken += character;
-                    continue;
-                }
-            }
+			|| character == '/'
+		){
+			if(character == '.'){
+				if(currentToken.match(/-?([0-9]+)/g)){
+					currentToken += character;
+					continue;
+				}
+			}
 			else if(character == '{' && code[i + 1] == '{'){
 				tokens.push('{{');
 				i++;
@@ -168,28 +173,40 @@ function lex(code) {
 				inPreprocessor = false;
 				continue;
 			}
+			else if(character == '/' && code[i + 1] == '/'){
+				tokens.push(currentToken);
+				currentToken = '';
+				let comment = character + code[i + 1];
+				i += 2;
+				while(code[i] != '\n'){
+					comment += code[i];
+					i++;
+				}
+				tokens.push(comment);
+				continue;
+			}
 			
 			if(inPreprocessor){
 				currentToken += character;
 				continue;
 			}
 			
-            tokens.push(currentToken);
-            tokens.push(character);
-            currentToken = '';
-        }else{
-            currentToken += character;
-        }
-
-        if(i == code.length - 1){
-            tokens.push(currentToken);
-        }
-    }
+			tokens.push(currentToken);
+			tokens.push(character);
+			currentToken = '';
+		}else{
+			currentToken += character;
+		}
+		
+		if(i == code.length - 1){
+			tokens.push(currentToken);
+		}
+	}
 	
-    let inQuotes = false;
-    let quoteString = '';
-
-    tokens = tokens.filter(e => e);
+	let inQuotes = false;
+	let quoteString = '';
+	
+	tokens = tokens.filter(e => e);
 	
 	for(let i = 0; i < tokens.length; i++){
 		if(tokens[i].includes("'") && !inQuotes) {
@@ -209,17 +226,23 @@ function lex(code) {
 	}
 	
 	tokens = tokens.filter(e => e);
-    for(let i = 0; i < tokens.length; i++){
-        if(tokens[i].includes('{{') && !inHTML) {
-            inHTML = true;
-        }else if(tokens[i].includes('}}') && inHTML){
-            inHTML = false;
-        }
+	for(let i = 0; i < tokens.length; i++){
+		if(tokens[i].includes('{{') && !inHTML) {
+			inHTML = true;
+		}else if(tokens[i].includes('}}') && inHTML){
+			inHTML = false;
+		}
+		
+		if(inHTML && tokens[i].includes(' ')) {
+			tokens[i] = tokens[i].replace(' ', '%20%$space');
+		}
+	}
+	
+	return tokens;
+}
 
-        if(inHTML && tokens[i].includes(' ')) {
-            tokens[i] = tokens[i].replace(' ', '%20%$space');
-        }
-    }
+function lex(code) {
+    let tokens = tokenize(code);
 
     tokens = tokens.filter(e => e != '' && e != ' ' && e != '\n' && e != '\t' && e && e != '\r' && e != '');
 	
@@ -286,6 +309,7 @@ type NodeType =
 	| 'breakStatement'
 	| 'continueStatement'
 	| 'elseIfStatement'
+	| 'commonStatement'
 	| 'whileStatement'
 	| 'dowhileStatement'
 	| 'whenStatement'
@@ -311,7 +335,17 @@ type NodeType =
 	| 'listLiteral'
     ;
 
-let isControl: NodeType[] = ['ifStatement', 'repeatStatement', 'functionDeclaration', 'classDeclaration', 'htmlStatement', 'elseIfStatement', 'whenStatement', "identifier"];
+let isControl: NodeType[] = [
+	'ifStatement',
+	'repeatStatement',
+	'functionDeclaration',
+	'classDeclaration',
+	'htmlStatement',
+	'elseIfStatement',
+	'whenStatement',
+	"identifier",
+	"elseIfStatement"
+];
 interface Statement {
     kind: NodeType;
 }
@@ -361,11 +395,12 @@ interface RepeatStatement extends Statement{
 	kind: 'repeatStatement';
 	variableName: string;
 	values: any[];
+	for: boolean;
 	body: Statement[];
 	
-	start: Expression,
-	end: Expression,
-	inc: Expression,
+	start: Expression;
+	end: Expression;
+	inc: Expression;
 }
 
 interface ClassDeclaration extends Statement{
@@ -453,6 +488,7 @@ interface ElseIfStatement extends Statement{
 	kind: "elseIfStatement";
 	ifBlock?: Statement;
 	body: Statement[];
+	commonStatement?: CommonStatement;
 }
 
 interface IfStatement extends Statement{
@@ -460,6 +496,11 @@ interface IfStatement extends Statement{
 	condition: Expression;
 	body: Statement[];
 	elseIfBlock?: ElseIfStatement;
+}
+
+interface CommonStatement extends Statement{
+	kind: 'commonStatement';
+	body: Statement[];
 }
 
 interface WhileStatement extends Statement{
@@ -485,8 +526,76 @@ interface PassStatement extends Statement{
 	condition: Statement;
 }
 //Parser
-class Parser{
+function throwError(msg: string, token: number){
+	let tokens = tokenize(code);
+	
+	tokens = tokens.filter(e => e);
+	
+	let out = '';
+	let beforeError = '';
+	let errorMsg = '';
+	let spaceFromNewline = '';
+	let space = '';
+	let special = '';
+	let afterSpecial = '';
+	
+	for(let i = 0; i < tokens.length; i++){
+		out += tokens[i];
+		if(tokens[i] == '\n'){
+			spaceFromNewline = '';
+		}else{
+			for(let k = 0; k < tokens[i].length; k++) {
+				if(tokens[i] == '\t') {
+					spaceFromNewline += '\t';
+					break;
+				}
+				else {
+					spaceFromNewline += ' ';
+				}
+			}
+		}
+		
+		if(tokens[i] == ' ' || tokens[i] == '\t' || tokens[i] == '\n'){
+			token++;
+		}
+		
+		if(i == token){
+			special = tokens[i];
+			space = spaceFromNewline;
+			errorMsg = `^ ${msg}`;
+			
+			beforeError = out.slice(0, -tokens[i].length);
+			out = '';
+			
+			while(tokens[i] != '\n' && i != tokens.length - 1){
+				afterSpecial += tokens[i];
+				i++;
+			}
+			afterSpecial = afterSpecial.slice(special.length);
+			
+			if(tokens[i + 1] == '\n'){
+				i++;
+			}
+			
+			token = undefined;
+		}
+	}
+	
+	console.error(`%c${beforeError}%c${special}%c${afterSpecial}\n%c${space.slice(0, -1)}%c${errorMsg}\n%c${out}`,
+		`color:white;`,
+		'color:white; text-decoration: underline; text-decoration-color: #c4272a;',
+		'color:white',
+		`color:white`,
+		`color:#c4272a; padding: 1px`,
+		`color:white;`
+	);
+	
+	throw msg;
+}
 
+class Parser{
+	
+	private currentToken = 0;
     private tokens: Token[] = [];
 	private currentPass = 0;
 
@@ -521,13 +630,14 @@ class Parser{
     }
 
     private eat(){
+		this.currentToken++;
         return this.tokens.shift();
     }
 
     private expect(expected: string, err: any){
         let prev = this.eat();
         if(prev.lexer != expected || !prev)
-            throw (err);
+			throwError (err, this.currentToken - 2);
 
         return prev;
     }
@@ -562,6 +672,9 @@ class Parser{
 				return this.parseWhenStatement();
 			case 'PASS':
 				return this.parsePassStatement();
+			case 'COMMENT':
+				this.eat();
+				return this.parseStatement();
             default:
                 return this.parseExpression()
         }
@@ -589,7 +702,7 @@ class Parser{
                 this.expect(')', `Unexpected token: ${this.at().value}. Expected ')'`);
                 return value;
             default:
-                throw (`Unexpected token: ${this.at().value} of lexer ${this.at().lexer}`);
+				throwError(`Unexpected token: ${this.at().value} of lexer ${this.at().lexer}`, this.currentToken);
         }
     }
 
@@ -866,7 +979,7 @@ class Parser{
                 property = this.parseConstant();
 
                 if(property.kind != 'identifier'){
-                    throw  `Expected Identifier after dot operator. Instead got ${property}`;
+					throwError(`Expected Identifier after dot operator. Instead got ${property}`, this.currentToken);
                 }
             }else{
                 computed = true;
@@ -972,7 +1085,7 @@ class Parser{
             case 'FUNC':
                 return this.parseFunctionDeclaration();
             default:
-               throw `Unknown token ${this.at().value} of type ${this.at().lexer}`;
+				throwError( `Unknown token ${this.at().value} of type ${this.at().lexer}`, this.currentToken);
         }
     }
 
@@ -1018,8 +1131,8 @@ class Parser{
 
 	//repeat(10)/repeat(10: i)/repeat(10: i = 0)/repeat(10: i = 0; 1)/repeat([1, 2, 3])/repeat([1, 2, 3]: i)
 	private parseRepeatStatement(): Statement {
-		this.eat();
-		this.expect('(', `Expected '(' after repeat`);
+		const kw = this.eat().value;
+		this.expect('(', `Expected '(' after repeat/for`);
 		let values = [];
 		let name = '';
 		let end;
@@ -1027,6 +1140,9 @@ class Parser{
 		let inc;
 		
 		if(this.at().lexer == '['){
+			if(kw != 'for'){
+				throwError('Cannot iterate in a repeat statement, use a for loop instead', this.currentToken);
+			}
 			this.eat();
 			while(this.at().lexer != ']'){
 				values.push(this.parseExpression());
@@ -1059,11 +1175,11 @@ class Parser{
 			}
 		}
 		
-		this.expect(')', `Expected ')' after repeat`);
+		this.expect(')', `Expected ')' after repeat/for`);
 		
 		let body = this.parseBlock();
 		
-		return {kind: "repeatStatement", variableName: name, end, start, inc, values, body} as RepeatStatement;
+		return {kind: "repeatStatement", variableName: name, end, start, inc, values, body, for: kw == 'for'} as RepeatStatement;
 	}
 	
 	private parseComparisonExpression(): Expression {
@@ -1114,19 +1230,20 @@ class Parser{
 	private parseElseIfStatement(): Statement {
 		this.eat();
 		let ifBlock: IfStatement;
+		let commonStatement: CommonStatement;
 		let body: Statement[] = [];
 		
 		if(this.at().lexer == 'IF'){
 			ifBlock = this.parseIfStatement() as IfStatement;
 		}else{
-			this.expect('{', `Expected '{' after else block`);
-			while(this.at().lexer != '}'){
-				body.push(this.parseStatement());
-			}
+			body = this.parseBlock();
+		}
+		if(this.at().lexer == 'COMMON'){
 			this.eat();
+			commonStatement = { kind: "commonStatement", body: this.parseBlock() };
 		}
 		
-		return { kind: "elseIfStatement", body, ifBlock } as ElseIfStatement;
+		return { kind: "elseIfStatement", body, ifBlock, commonStatement } as ElseIfStatement;
 	}
 	
 	private parseWhile(): Statement {
@@ -1362,7 +1479,10 @@ function VisitVariableDeclaration(context: VariableDeclaration, env: Environment
             throw `Unknown type '${context.type}'`;
     }else if(value.type != context.type && context.type != 'null')
         throw `Can not assign value of type ${value.type} to ${context.type}`
-
+	
+	if(value.type == 'userDefinedFunction'){
+		return env.declareUserDefinedFunction(context.identifier, (value as UserDefinedFunctionValue).body, (value as UserDefinedFunctionValue).returnType, (value as UserDefinedFunctionValue).params, (value as UserDefinedFunctionValue).returnStatement);
+	}
 	//@ts-ignore
     return env.declareVariable(context.identifier, value, context.type, false);
 }
@@ -1606,17 +1726,20 @@ function VisitRepeatStatement(context: RepeatStatement, env: Environment): Runti
 		let inc = context.inc? Visit(context.inc, env): MK_INT(1);
 		let end = Visit(context.end, env);
 		
-		if(end.type == 'list'){
+		if(end.type == 'list' || end.type == 'string'){
+			if(!context.for)
+				throw 'Cannot use repeat statement to iterate, use for loop instead';
 			// @ts-ignore
 			for(let i of end.value){
 				let newEnv = new Environment(env);
-				newEnv.declareVariable(variableName, MK_ANY(i), 'any');
-				
+				newEnv.declareVariable(variableName, MK_ANY_PURE(i), 'any');
 				for(let statement of context.body){
 					Visit(statement, newEnv);
 				}
 			}
 		}else {
+			if(context.for)
+				throw 'Cannot use for loop, use repeat statement instead';
 			//@ts-ignore
 			for (let i = start.value; i < end.value; i += inc.value) {
 				let newEnv = new Environment(env);
@@ -1697,7 +1820,6 @@ function VisitIfStatement(context: IfStatement, env: Environment): RuntimeValue 
 			}
 			Visit(expression, newEnv);
 		}
-		return MK_NULL();
 	}
 	else if(context.condition.kind == 'identifier'){
 		//@ts-ignore
@@ -1714,7 +1836,7 @@ function VisitIfStatement(context: IfStatement, env: Environment): RuntimeValue 
 	}
 	
 	if(context.elseIfBlock){
-		if(context.elseIfBlock.ifBlock){
+		if(context.elseIfBlock.ifBlock && !willExecute){
 			VisitIfStatement(context.elseIfBlock.ifBlock as IfStatement, env);
 		}else if(!willExecute){
 			
@@ -1726,7 +1848,15 @@ function VisitIfStatement(context: IfStatement, env: Environment): RuntimeValue 
 				Visit(expression, newEnv);
 			}
 		}
+		
+		if(context.elseIfBlock.commonStatement){
+			let newEnv = new Environment(env);
+			for(let statement of context.elseIfBlock.commonStatement.body){
+				Visit(statement, newEnv);
+			}
+		}
 	}
+	
 	
 	return MK_NULL();
 }
@@ -2034,9 +2164,7 @@ function VisitFunctionCall(call: CallExpression, env: Environment): RuntimeValue
     }
 	
     let returnValue = Visit((func.value.returnStatement as ReturnStatement).returnValue, env);
-
-    if(returnValue.type != func.returnType)
-        if(func.returnType != 'any')
+    if(returnValue.type != func.returnType && func.returnType != 'any')
             throw `Cannot return type ${returnValue.type} as ${func.returnType}`;
 
     return returnValue;
@@ -2279,15 +2407,27 @@ function setupScope(env: Environment){
 
     function log(_args: RuntimeValue[], _env: Environment): RuntimeValue{
         _args.forEach((value) => {
-			if(value.type == 'object')
+			if(value.type == 'object') {
 				// @ts-ignore
 				console.log(value.properties);
-			// @ts-ignore
-			console.log(value.value);
+			}
+			else if(value.type == 'userDefinedFunction') {
+				console.log(value);
+			}else {
+				// @ts-ignore
+				console.log(value.value);
+			}
 		});
 
         return MK_NULL();
     }
+	function info(_args: RuntimeValue[], _env: Environment): RuntimeValue{
+		_args.forEach((value) => {
+			console.log(value);
+		});
+		
+		return MK_NULL();
+	}
 	
     async function run(_args: RuntimeValue[], _env: Environment): Promise<RuntimeValue>{
         if(!_args[0])
@@ -2408,7 +2548,8 @@ function setupScope(env: Environment){
 	
     // @ts-ignore
     env.declareFunction('run', MK_NATIVE_FUNCTION(run, 'null'));
-    env.declareFunction('log', MK_NATIVE_FUNCTION(log, 'null'));
+	env.declareFunction('log', MK_NATIVE_FUNCTION(log, 'null'));
+	env.declareFunction('info', MK_NATIVE_FUNCTION(info, 'null'));
 	env.declareFunction('getTime', MK_NATIVE_FUNCTION(getTime, 'integer'));
 	env.declareFunction('range', MK_NATIVE_FUNCTION(range, 'list'));
 	env.declareFunction('js', MK_NATIVE_FUNCTION(js, 'any'));
@@ -2480,12 +2621,14 @@ if(userAgent.match(/chrome|chromium|crios/i)){
     browserName="none";
 }
 
+let code = '';
+
 if(browserName != 'none') {
     let cstags = document.getElementsByTagName('inertia');
 
     for (let i = 0; i < cstags.length; i++) {
         let tag = cstags[i];
-        let code = '';
+        
 
         tag.setAttribute('style', 'display: none');
 
@@ -2495,7 +2638,6 @@ if(browserName != 'none') {
             code = tag.innerHTML;
             code = decodeHTML(code);
         }
-
 		console.time('Time');
         evaluate(code);
 		console.timeEnd('Time');

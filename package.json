@@ -12,5 +12,8 @@
   "keywords": [],
   "author": "Michalis Chatzittofi",
   "license": "ISC",
-  "description": ""
+  "description": "",
+  "devDependencies": {
+    "@total-typescript/ts-reset": "^0.4.2"
+  }
 }

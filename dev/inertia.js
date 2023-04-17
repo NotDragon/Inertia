@@ -51,6 +51,7 @@ var lexerRules = [
     ['break', /break/g],
     ['continue', /continue/g],
     ['else', /else/g],
+    ['common', /common/g],
     ['while', /while/g],
     ['dowhile', /dowhile/g],
     ['htmlStart', /{{/g],
@@ -72,7 +73,9 @@ var lexerRules = [
     ['>=', />=/g],
     ['<=', /<=/g],
     ['sub', /-/g],
+    ['comment', /\/\/.*/g],
     ['repeat', /repeat/g],
+    ['repeat', /for/g],
     ['return', /return/g],
     ['func', /func/g],
     ['class', /class/g],
@@ -116,7 +119,7 @@ function decodeHTML(text) {
         .replace("&quot;", '"')
         .replace("#039;", "'");
 }
-function lex(code) {
+function tokenize(code) {
     var tokens = [];
     var currentToken = '';
     var inHTML = false;
@@ -143,7 +146,8 @@ function lex(code) {
             || character == ':'
             || character == '.'
             || character == "'"
-            || character == '@') {
+            || character == '@'
+            || character == '/') {
             if (character == '.') {
                 if (currentToken.match(/-?([0-9]+)/g)) {
                     currentToken += character;
@@ -187,6 +191,18 @@ function lex(code) {
                 tokens.push(currentToken + ';');
                 currentToken = '';
                 inPreprocessor = false;
+                continue;
+            }
+            else if (character == '/' && code[i + 1] == '/') {
+                tokens.push(currentToken);
+                currentToken = '';
+                var comment = character + code[i + 1];
+                i += 2;
+                while (code[i] != '\n') {
+                    comment += code[i];
+                    i++;
+                }
+                tokens.push(comment);
                 continue;
             }
             if (inPreprocessor) {
@@ -235,6 +251,10 @@ function lex(code) {
             tokens[i] = tokens[i].replace(' ', '%20%$space');
         }
     }
+    return tokens;
+}
+function lex(code) {
+    var tokens = tokenize(code);
     tokens = tokens.filter(function (e) { return e != '' && e != ' ' && e != '\n' && e != '\t' && e && e != '\r' && e != ''; });
     var returnValue = new Array();
     //lexer part
@@ -273,10 +293,70 @@ function preProcessor(lexer) {
     }
     return lexer;
 }
-var isControl = ['ifStatement', 'repeatStatement', 'functionDeclaration', 'classDeclaration', 'htmlStatement', 'elseIfStatement', 'whenStatement', "identifier"];
+var isControl = [
+    'ifStatement',
+    'repeatStatement',
+    'functionDeclaration',
+    'classDeclaration',
+    'htmlStatement',
+    'elseIfStatement',
+    'whenStatement',
+    "identifier",
+    "elseIfStatement"
+];
 //Parser
+function throwError(msg, token) {
+    var tokens = tokenize(code);
+    tokens = tokens.filter(function (e) { return e; });
+    var out = '';
+    var beforeError = '';
+    var errorMsg = '';
+    var spaceFromNewline = '';
+    var space = '';
+    var special = '';
+    var afterSpecial = '';
+    for (var i = 0; i < tokens.length; i++) {
+        out += tokens[i];
+        if (tokens[i] == '\n') {
+            spaceFromNewline = '';
+        }
+        else {
+            for (var k = 0; k < tokens[i].length; k++) {
+                if (tokens[i] == '\t') {
+                    spaceFromNewline += '\t';
+                    break;
+                }
+                else {
+                    spaceFromNewline += ' ';
+                }
+            }
+        }
+        if (tokens[i] == ' ' || tokens[i] == '\t' || tokens[i] == '\n') {
+            token++;
+        }
+        if (i == token) {
+            special = tokens[i];
+            space = spaceFromNewline;
+            errorMsg = "^ ".concat(msg);
+            beforeError = out.slice(0, -tokens[i].length);
+            out = '';
+            while (tokens[i] != '\n' && i != tokens.length - 1) {
+                afterSpecial += tokens[i];
+                i++;
+            }
+            afterSpecial = afterSpecial.slice(special.length);
+            if (tokens[i + 1] == '\n') {
+                i++;
+            }
+            token = undefined;
+        }
+    }
+    console.error("%c".concat(beforeError, "%c").concat(special, "%c").concat(afterSpecial, "\n%c").concat(space.slice(0, -1), "%c").concat(errorMsg, "\n%c").concat(out), "color:white;", 'color:white; text-decoration: underline; text-decoration-color: #c4272a;', 'color:white', "color:white", "color:#c4272a; padding: 1px", "color:white;");
+    throw msg;
+}
 var Parser = /** @class */ (function () {
     function Parser() {
+        this.currentToken = 0;
         this.tokens = [];
         this.currentPass = 0;
     }
@@ -304,12 +384,13 @@ var Parser = /** @class */ (function () {
         return this.tokens[0];
     };
     Parser.prototype.eat = function () {
+        this.currentToken++;
         return this.tokens.shift();
     };
     Parser.prototype.expect = function (expected, err) {
         var prev = this.eat();
         if (prev.lexer != expected || !prev)
-            throw (err);
+            throwError(err, this.currentToken - 2);
         return prev;
     };
     Parser.prototype.parseStatement = function () {
@@ -342,6 +423,9 @@ var Parser = /** @class */ (function () {
                 return this.parseWhenStatement();
             case 'PASS':
                 return this.parsePassStatement();
+            case 'COMMENT':
+                this.eat();
+                return this.parseStatement();
             default:
                 return this.parseExpression();
         }
@@ -368,7 +452,7 @@ var Parser = /** @class */ (function () {
                 this.expect(')', "Unexpected token: ".concat(this.at().value, ". Expected ')'"));
                 return value;
             default:
-                throw ("Unexpected token: ".concat(this.at().value, " of lexer ").concat(this.at().lexer));
+                throwError("Unexpected token: ".concat(this.at().value, " of lexer ").concat(this.at().lexer), this.currentToken);
         }
     };
     Parser.prototype.parseAdditiveExpression = function () {
@@ -603,7 +687,7 @@ var Parser = /** @class */ (function () {
                 computed = false;
                 property = this.parseConstant();
                 if (property.kind != 'identifier') {
-                    throw "Expected Identifier after dot operator. Instead got ".concat(property);
+                    throwError("Expected Identifier after dot operator. Instead got ".concat(property), this.currentToken);
                 }
             }
             else {
@@ -693,7 +777,7 @@ var Parser = /** @class */ (function () {
             case 'FUNC':
                 return this.parseFunctionDeclaration();
             default:
-                throw "Unknown token ".concat(this.at().value, " of type ").concat(this.at().lexer);
+                throwError("Unknown token ".concat(this.at().value, " of type ").concat(this.at().lexer), this.currentToken);
         }
     };
     Parser.prototype.parseHTMLStart = function () {
@@ -726,14 +810,17 @@ var Parser = /** @class */ (function () {
     };
     //repeat(10)/repeat(10: i)/repeat(10: i = 0)/repeat(10: i = 0; 1)/repeat([1, 2, 3])/repeat([1, 2, 3]: i)
     Parser.prototype.parseRepeatStatement = function () {
-        this.eat();
-        this.expect('(', "Expected '(' after repeat");
+        var kw = this.eat().value;
+        this.expect('(', "Expected '(' after repeat/for");
         var values = [];
         var name = '';
         var end;
         var start;
         var inc;
         if (this.at().lexer == '[') {
+            if (kw != 'for') {
+                throwError('Cannot iterate in a repeat statement, use a for loop instead', this.currentToken);
+            }
             this.eat();
             while (this.at().lexer != ']') {
                 values.push(this.parseExpression());
@@ -762,9 +849,9 @@ var Parser = /** @class */ (function () {
                 inc = this.parseExpression();
             }
         }
-        this.expect(')', "Expected ')' after repeat");
+        this.expect(')', "Expected ')' after repeat/for");
         var body = this.parseBlock();
-        return { kind: "repeatStatement", variableName: name, end: end, start: start, inc: inc, values: values, body: body };
+        return { kind: "repeatStatement", variableName: name, end: end, start: start, inc: inc, values: values, body: body, for: kw == 'for' };
     };
     Parser.prototype.parseComparisonExpression = function () {
         var left = this.parseObjectExpression();
@@ -799,18 +886,19 @@ var Parser = /** @class */ (function () {
     Parser.prototype.parseElseIfStatement = function () {
         this.eat();
         var ifBlock;
+        var commonStatement;
         var body = [];
         if (this.at().lexer == 'IF') {
             ifBlock = this.parseIfStatement();
         }
         else {
-            this.expect('{', "Expected '{' after else block");
-            while (this.at().lexer != '}') {
-                body.push(this.parseStatement());
-            }
-            this.eat();
+            body = this.parseBlock();
         }
-        return { kind: "elseIfStatement", body: body, ifBlock: ifBlock };
+        if (this.at().lexer == 'COMMON') {
+            this.eat();
+            commonStatement = { kind: "commonStatement", body: this.parseBlock() };
+        }
+        return { kind: "elseIfStatement", body: body, ifBlock: ifBlock, commonStatement: commonStatement };
     };
     Parser.prototype.parseWhile = function () {
         this.eat();
@@ -945,6 +1033,9 @@ function VisitVariableDeclaration(context, env) {
     }
     else if (value.type != context.type && context.type != 'null')
         throw "Can not assign value of type ".concat(value.type, " to ").concat(context.type);
+    if (value.type == 'userDefinedFunction') {
+        return env.declareUserDefinedFunction(context.identifier, value.body, value.returnType, value.params, value.returnStatement);
+    }
     //@ts-ignore
     return env.declareVariable(context.identifier, value, context.type, false);
 }
@@ -1159,12 +1250,14 @@ function VisitRepeatStatement(context, env) {
         var start = context.start ? Visit(context.start, env) : MK_INT();
         var inc = context.inc ? Visit(context.inc, env) : MK_INT(1);
         var end = Visit(context.end, env);
-        if (end.type == 'list') {
+        if (end.type == 'list' || end.type == 'string') {
+            if (!context.for)
+                throw 'Cannot use repeat statement to iterate, use for loop instead';
             // @ts-ignore
             for (var _i = 0, _a = end.value; _i < _a.length; _i++) {
                 var i = _a[_i];
                 var newEnv = new Environment(env);
-                newEnv.declareVariable(variableName, MK_ANY(i), 'any');
+                newEnv.declareVariable(variableName, MK_ANY_PURE(i), 'any');
                 for (var _b = 0, _c = context.body; _b < _c.length; _b++) {
                     var statement = _c[_b];
                     Visit(statement, newEnv);
@@ -1172,6 +1265,8 @@ function VisitRepeatStatement(context, env) {
             }
         }
         else {
+            if (context.for)
+                throw 'Cannot use for loop, use repeat statement instead';
             //@ts-ignore
             for (var i = start.value; i < end.value; i += inc.value) {
                 var newEnv = new Environment(env);
@@ -1250,7 +1345,6 @@ function VisitIfStatement(context, env) {
             }
             Visit(expression, newEnv);
         }
-        return MK_NULL();
     }
     else if (context.condition.kind == 'identifier') {
         //@ts-ignore
@@ -1267,7 +1361,7 @@ function VisitIfStatement(context, env) {
         }
     }
     if (context.elseIfBlock) {
-        if (context.elseIfBlock.ifBlock) {
+        if (context.elseIfBlock.ifBlock && !willExecute) {
             VisitIfStatement(context.elseIfBlock.ifBlock, env);
         }
         else if (!willExecute) {
@@ -1278,6 +1372,13 @@ function VisitIfStatement(context, env) {
                     break;
                 }
                 Visit(expression, newEnv);
+            }
+        }
+        if (context.elseIfBlock.commonStatement) {
+            var newEnv = new Environment(env);
+            for (var _f = 0, _g = context.elseIfBlock.commonStatement.body; _f < _g.length; _f++) {
+                var statement = _g[_f];
+                Visit(statement, newEnv);
             }
         }
     }
@@ -1523,9 +1624,8 @@ function VisitFunctionCall(call, env) {
             Visit(expression, env);
     }
     var returnValue = Visit(func.value.returnStatement.returnValue, env);
-    if (returnValue.type != func.returnType)
-        if (func.returnType != 'any')
-            throw "Cannot return type ".concat(returnValue.type, " as ").concat(func.returnType);
+    if (returnValue.type != func.returnType && func.returnType != 'any')
+        throw "Cannot return type ".concat(returnValue.type, " as ").concat(func.returnType);
     return returnValue;
 }
 function VisitCallExpression(call, env) {
@@ -1687,11 +1787,23 @@ function setupScope(env) {
     env.declareVariable('false', MK_BOOL(false), 'bool', true);
     function log(_args, _env) {
         _args.forEach(function (value) {
-            if (value.type == 'object')
+            if (value.type == 'object') {
                 // @ts-ignore
                 console.log(value.properties);
-            // @ts-ignore
-            console.log(value.value);
+            }
+            else if (value.type == 'userDefinedFunction') {
+                console.log(value);
+            }
+            else {
+                // @ts-ignore
+                console.log(value.value);
+            }
+        });
+        return MK_NULL();
+    }
+    function info(_args, _env) {
+        _args.forEach(function (value) {
+            console.log(value);
         });
         return MK_NULL();
     }
@@ -1804,6 +1916,7 @@ function setupScope(env) {
     // @ts-ignore
     env.declareFunction('run', MK_NATIVE_FUNCTION(run, 'null'));
     env.declareFunction('log', MK_NATIVE_FUNCTION(log, 'null'));
+    env.declareFunction('info', MK_NATIVE_FUNCTION(info, 'null'));
     env.declareFunction('getTime', MK_NATIVE_FUNCTION(getTime, 'integer'));
     env.declareFunction('range', MK_NATIVE_FUNCTION(range, 'list'));
     env.declareFunction('js', MK_NATIVE_FUNCTION(js, 'any'));
@@ -1870,11 +1983,11 @@ else if (userAgent.match(/edg/i)) {
 else {
     browserName = "none";
 }
+var code = '';
 if (browserName != 'none') {
     var cstags = document.getElementsByTagName('inertia');
     for (var i = 0; i < cstags.length; i++) {
         var tag = cstags[i];
-        var code = '';
         tag.setAttribute('style', 'display: none');
         if (tag.getAttribute('src'))
             code = readTextFile("".concat(tag.getAttribute('src')));
